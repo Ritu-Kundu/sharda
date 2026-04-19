@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Editor settings
+.vscode/
+
+# Prompt files
+/Prompts/
+
+# CMake and build outputs
+/build/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+Makefile
+cmake_install.cmake
+build.ninja
+.ninja_*
+compile_commands.json
+
+# Logs
+*.log
+
+# Sharda generated outputs
+*.raw.gfa
+*.clean.gfa
+*.unitig.gfa
+*.haplotypes.fa
+*_debug/
+sharda_out*
