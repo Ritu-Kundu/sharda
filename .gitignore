@@ -7,6 +7,9 @@
 # Prompt files
 /Prompts/
 
+# Large local-only resources
+/resources/raw_resources/
+
 # CMake and build outputs
 /build/
 /cmake-build-*/

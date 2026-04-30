@@ -64,6 +64,26 @@ To skip tests:
 cmake -B build -DSHARDA_BUILD_TESTS=OFF
 ```
 
+## Conda Installation
+
+This repository includes a Bioconda-style recipe in [recipe/meta.yaml](recipe/meta.yaml).
+
+Once the package is published on Bioconda, install it with:
+
+```bash
+mamba install -c conda-forge -c bioconda sharda
+```
+
+To build the package locally from this repository:
+
+```bash
+conda install -c conda-forge -c bioconda conda-build mamba
+conda build recipe
+```
+
+The recipe is configured to use conda-provided `htslib`, `highs`, and `spdlog`
+instead of fetching dependencies from the network.
+
 ## Usage
 
 ### Single-region mode
@@ -79,6 +99,52 @@ Assemble haplotypes for a single target region from a name-sorted BAM:
 ```
 
 Add `-t tandem_repeats.bed` to enable tandem repeat-aware IRR anchoring.
+
+### Example data: simulated heterozygous deletion
+
+The repository includes a small example dataset under
+`resources/example_resources/eg1` built from `chr5:70954000-70956000` of
+GRCh38. The example simulates a heterozygous 900 bp deletion over the interval
+`[70954500, 70955400)` and provides the aligned reads in the format required by
+single-region mode.
+
+Run Sharda on the example with:
+
+```bash
+./build/sharda \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o resources/example_resources/eg1/results/sharda_eg1
+```
+
+To keep the graph outputs and verbose logging for debugging:
+
+```bash
+./build/sharda \
+  -d \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o resources/example_resources/eg1/results/sharda_eg1_debug
+```
+
+Relevant example files:
+
+- `resources/example_resources/eg1/example_region.fasta` — extracted reference
+  region used as the assembly backbone.
+- `resources/example_resources/eg1/example_region_del_het.fa` — deleted
+  haplotype truth sequence.
+- `resources/example_resources/eg1/example_sample_truth.fa` — diploid truth
+  FASTA containing the reference and deleted haplotypes.
+- `resources/example_resources/eg1/results/example_reads.coord.bam` —
+  coordinate-sorted BAM for inspection and downstream evaluation.
+- `resources/example_resources/eg1/results/example_reads.namesorted.bam` —
+  name-sorted BAM consumed by Sharda single-region mode.
+
+For the exact commands used to generate the example data, see
+`doc/data/eg1/README.md`. For the current evaluation result on this dataset,
+see `resources/example_resources/eg1/evaluation.md`.
 
 ### Whole-genome parallel mode
 

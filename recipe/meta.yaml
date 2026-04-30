@@ -1,0 +1,47 @@
+{% set name = "sharda" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  skip: true  # [win]
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - cmake >=3.14
+    - make
+    - pkg-config
+  host:
+    - htslib
+    - highs
+    - spdlog
+  run:
+    - htslib
+    - highs
+
+test:
+  commands:
+    - sharda -h
+
+about:
+  home: https://github.com/Ritu-Kundu/sharda
+  license: MIT
+  license_family: MIT
+  license_file: LICENSE
+  summary: Tandem repeat-aware haplotype assembler for short-read sequencing data
+  description: |
+    Sharda is a targeted haplotype assembler for short-read sequencing data.
+    It reconstructs phased haplotype sequences using a positional de Bruijn
+    graph, read-pair phasing constraints, and HiGHS-based flow decomposition.
+  dev_url: https://github.com/Ritu-Kundu/sharda
+
+extra:
+  recipe-maintainers:
+    - Ritu-Kundu
