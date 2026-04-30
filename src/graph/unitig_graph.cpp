@@ -55,6 +55,7 @@ bool UnitigGraph::build(const DBG& source) {
 
     const auto& nodes = source.nodes();
     size_t num_nodes = nodes.size();
+    size_t active_nodes = source.active_node_count();
 
     // Mark which nodes are "internal" (in-degree 1 AND out-degree 1)
     // and haven't been assigned to a unitig yet.
@@ -63,6 +64,10 @@ bool UnitigGraph::build(const DBG& source) {
     // Find maximal non-branching paths
     for (size_t i = 0; i < num_nodes; ++i) {
         const auto& nd = nodes[i];
+        if (source.is_node_removed(nd.id)) {
+            visited[i] = true;
+            continue;
+        }
         const auto& in_e  = source.in_edges(nd.id);
         const auto& out_e = source.out_edges(nd.id);
 
@@ -127,6 +132,7 @@ bool UnitigGraph::build(const DBG& source) {
     for (size_t i = 0; i < num_nodes; ++i) {
         if (visited[i]) continue;
         const auto& nd = nodes[i];
+        if (source.is_node_removed(nd.id)) continue;
         std::vector<uint64_t> path;
         uint64_t cur = nd.id;
 
@@ -153,8 +159,8 @@ bool UnitigGraph::build(const DBG& source) {
         unitigs_.push_back(std::move(u));
     }
 
-    spdlog::info("Unitig graph: {} unitigs from {} nodes",
-                 unitigs_.size(), num_nodes);
+    spdlog::info("Unitig graph: {} unitigs from {} active nodes ({} total nodes)",
+                 unitigs_.size(), active_nodes, num_nodes);
 
     // Build unitig-level edges from the original edges
     // An edge between unitigs exists when the last node of one unitig

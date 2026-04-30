@@ -29,18 +29,19 @@ Generated files:
 ## Read Simulation
 
 Paired-end reads were generated with `wgsim` using 150 bp reads, default insert
-size settings, and no extra simulated SNP/indel variation beyond sequencing
-errors.
+size settings, a lower sequencing error rate chosen to better approximate newer
+short-read sequencers, and no extra simulated SNP/indel variation beyond the
+configured sequencing errors.
 
 Commands used:
 
 ```bash
-wgsim -e 0.02 -d 500 -s 50 -N 34 -1 150 -2 150 -r 0 -R 0 -X 0 -S 11 \
+wgsim -e 0.001 -d 500 -s 50 -N 34 -1 150 -2 150 -r 0 -R 0 -X 0 -S 11 \
   resources/example_resources/eg1/example_region.fasta \
   resources/example_resources/eg1/results/ref_hap_R1.fq \
   resources/example_resources/eg1/results/ref_hap_R2.fq
 
-wgsim -e 0.02 -d 500 -s 50 -N 19 -1 150 -2 150 -r 0 -R 0 -X 0 -S 29 \
+wgsim -e 0.001 -d 500 -s 50 -N 19 -1 150 -2 150 -r 0 -R 0 -X 0 -S 29 \
   resources/example_resources/eg1/example_region_del_het.fa \
   resources/example_resources/eg1/results/del_hap_R1.fq \
   resources/example_resources/eg1/results/del_hap_R2.fq
@@ -79,16 +80,17 @@ samtools sort -n \
 
 ## Assembly Run
 
-Sharda was run in single-region mode with ploidy 2:
+Sharda was run in single-region mode with ploidy 2 and `k=45`:
 
 ```bash
 ./build/sharda \
   -d \
+  -k 45 \
   -r resources/example_resources/eg1/example_region.fasta \
   -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
   -p 2 \
-  -o resources/example_resources/eg1/results/sharda_eg1_debug
+  -o resources/example_resources/eg1/results/sharda_eg1_k45
 ```
 
-This run produced graph GFA outputs but no haplotype FASTA. The detailed run
+This run produced graph GFA outputs and a haplotype FASTA. The detailed run
 result is summarized in `resources/example_resources/eg1/evaluation.md`.

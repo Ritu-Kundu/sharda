@@ -28,6 +28,18 @@ std::vector<uint64_t> trace_tip(const DBG& graph, uint64_t start_node, bool forw
     return tip;
 }
 
+bool tip_has_haplotype_support(const DBG& graph, const std::vector<uint64_t>& tip) {
+    if (tip.empty()) return false;
+
+    std::unordered_set<uint64_t> tip_nodes(tip.begin(), tip.end());
+    for (const auto& he : graph.haplotype_edges()) {
+        if (tip_nodes.count(he.from_node) || tip_nodes.count(he.to_node)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Remove tips: dead-end paths shorter than threshold.
 /// Returns number of nodes removed.
 int remove_tips(DBG& graph, int max_tip_len) {
@@ -39,7 +51,8 @@ int remove_tips(DBG& graph, int max_tip_len) {
         // Check for dead-end at start (in-degree == 0, out-degree > 0)
         if (graph.in_edges(nid).empty() && !graph.out_edges(nid).empty()) {
             auto tip = trace_tip(graph, nid, true);
-            if (static_cast<int>(tip.size()) < max_tip_len) {
+            if (static_cast<int>(tip.size()) < max_tip_len &&
+                !tip_has_haplotype_support(graph, tip)) {
                 for (uint64_t id : tip) graph.remove_node(id);
                 removed += tip.size();
             }
@@ -47,7 +60,8 @@ int remove_tips(DBG& graph, int max_tip_len) {
         // Check for dead-end at end (out-degree == 0, in-degree > 0)
         if (graph.out_edges(nid).empty() && !graph.in_edges(nid).empty()) {
             auto tip = trace_tip(graph, nid, false);
-            if (static_cast<int>(tip.size()) < max_tip_len) {
+            if (static_cast<int>(tip.size()) < max_tip_len &&
+                !tip_has_haplotype_support(graph, tip)) {
                 for (uint64_t id : tip) graph.remove_node(id);
                 removed += tip.size();
             }
@@ -78,10 +92,20 @@ int prune_low_weight_edges(DBG& graph) {
     for (size_t i = 0; i < graph.edges().size(); ++i) {
         const auto& e = graph.edges()[i];
         const auto& from_node = graph.node(e.from);
+        const auto& to_node = graph.node(e.to);
+
+        // Preserve read-supported branch edges. In low-coverage examples,
+        // variant paths often carry single-read support against a higher-depth
+        // backbone, so pruning them by local backbone coverage erases the only
+        // alternative path before compaction.
+        if (!from_node.is_backbone || !to_node.is_backbone) {
+            continue;
+        }
+
         int32_t pos = from_node.ref_pos;
         if (pos < 0) {
             // For non-backbone, use the to-node's pos
-            pos = graph.node(e.to).ref_pos;
+            pos = to_node.ref_pos;
         }
         double avg = local_avg_weight(graph, pos);
         if (e.weight < 0.05 * avg) {
@@ -161,17 +185,32 @@ void clean_graph(DBG& graph, int mean_read_length) {
                  graph.node_count(), graph.edge_count());
 
     for (int iteration = 0; iteration < 10; ++iteration) {
+        size_t edges_before_tips = graph.edge_count();
         int tips     = remove_tips(graph, mean_read_length);
         graph.rebuild_adjacency();
+        size_t edges_after_tips = graph.edge_count();
+        size_t tip_edges_removed = edges_before_tips - edges_after_tips;
 
+        size_t edges_before_low_wt = graph.edge_count();
         int low_wt   = prune_low_weight_edges(graph);
         graph.rebuild_adjacency();
+        size_t edges_after_low_wt = graph.edge_count();
+        size_t low_wt_edges_removed = edges_before_low_wt - edges_after_low_wt;
 
+        size_t edges_before_bubbles = graph.edge_count();
         int bubbles  = pop_bubbles(graph);
         graph.rebuild_adjacency();
+        size_t edges_after_bubbles = graph.edge_count();
+        size_t bubble_edges_removed = edges_before_bubbles - edges_after_bubbles;
 
-        spdlog::debug("Cleaning iteration {}: tips={}, low_wt={}, bubbles={}",
-                      iteration, tips, low_wt, bubbles);
+        spdlog::info(
+            "Cleaning iteration {}: tip_nodes_removed={}, tip_edges_removed={}, "
+            "low_weight_edges_flagged={}, low_weight_edges_removed={}, "
+            "bubble_nodes_removed={}, bubble_edges_removed={}, remaining_edges={}",
+            iteration, tips, tip_edges_removed,
+            low_wt, low_wt_edges_removed,
+            bubbles, bubble_edges_removed,
+            graph.edge_count());
 
         if (tips == 0 && low_wt == 0 && bubbles == 0) break;
     }

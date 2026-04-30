@@ -46,6 +46,20 @@ uint64_t DBG::find_read_node(const std::string& kmer) const {
     return (it != kmer_to_node_.end()) ? it->second : UINT64_MAX;
 }
 
+size_t DBG::active_node_count() const {
+    size_t active = 0;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        if (!is_node_removed(i)) {
+            active++;
+        }
+    }
+    return active;
+}
+
+bool DBG::is_node_removed(uint64_t node_id) const {
+    return node_id < node_removed_.size() && node_removed_[node_id];
+}
+
 void DBG::add_edge(uint64_t from, uint64_t to) {
     auto it = edge_map_.find(from);
     if (it != edge_map_.end()) {

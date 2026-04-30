@@ -3,6 +3,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <chrono>
 #include <filesystem>
 #include <spdlog/spdlog.h>
 
@@ -24,6 +25,33 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+class StageTimer {
+public:
+    explicit StageTimer(std::string stage)
+        : stage_(std::move(stage)), start_(std::chrono::steady_clock::now()) {
+        spdlog::info("Stage start: {}", stage_);
+    }
+
+    void checkpoint(const char* message) const {
+        spdlog::info("Stage progress: {} - {} ({} ms)",
+                     stage_, message, elapsed_ms());
+    }
+
+    void finish() const {
+        spdlog::info("Stage done: {} ({} ms)", stage_, elapsed_ms());
+    }
+
+private:
+    long long elapsed_ms() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - start_)
+            .count();
+    }
+
+    std::string stage_;
+    std::chrono::steady_clock::time_point start_;
+};
 
 struct Args {
     std::string ref_fasta;
@@ -88,14 +116,19 @@ Args parse_args(int argc, char* argv[]) {
 /// Run the single-region pipeline (original behavior).
 int run_single_region(const Args& args) {
     // ── 1. Read inputs ──────────────────────────────────────────────
+    StageTimer total_timer("single-region pipeline");
     spdlog::info("Reading reference: {}", args.ref_fasta);
+    StageTimer reference_timer("read reference fasta");
     auto [ref_name, ref_seq] = sharda::read_fasta(args.ref_fasta);
+    reference_timer.finish();
     spdlog::info("Reference: {} ({} bp)", ref_name, ref_seq.size());
 
     std::vector<sharda::TandemRepeat> trs;
     if (!args.bed.empty()) {
         spdlog::info("Reading tandem repeats: {}", args.bed);
+        StageTimer tr_timer("read tandem repeat bed");
         trs = sharda::read_bed(args.bed);
+        tr_timer.finish();
         spdlog::info("Tandem repeats: {}", trs.size());
     } else {
         spdlog::info("No tandem repeat BED provided; assembling without TR annotations");
@@ -104,15 +137,19 @@ int run_single_region(const Args& args) {
     // ── 2. Build backbone ───────────────────────────────────────────
     spdlog::info("Building backbone (k={})", args.k);
     sharda::DBG graph(args.k);
+    StageTimer backbone_timer("build backbone");
     sharda::build_backbone(graph, ref_seq, trs);
+    backbone_timer.finish();
 
     // ── 3. Add reads ────────────────────────────────────────────────
     spdlog::info("Adding reads from: {}", args.bam);
     uint64_t read_pairs = 0;
+    StageTimer read_timer("add reads");
     sharda::iterate_read_pairs(args.bam, [&](sharda::ReadPair&& pair) {
         sharda::add_read_pair(pair, graph, trs);
         read_pairs++;
     });
+    read_timer.finish();
     spdlog::info("Added {} read pairs", read_pairs);
     spdlog::info("Graph after read addition: {} nodes, {} edges, {} hap_edges",
                  graph.node_count(), graph.edge_count(),
@@ -125,7 +162,9 @@ int run_single_region(const Args& args) {
     // ── 4. Clean graph ──────────────────────────────────────────────
     spdlog::info("Cleaning graph");
     int mean_read_len = 150;
+    StageTimer clean_timer("clean graph");
     sharda::clean_graph(graph, mean_read_len);
+    clean_timer.finish();
 
     std::string clean_gfa = args.out_prefix + ".clean.gfa";
     sharda::write_gfa(clean_gfa, graph);
@@ -134,10 +173,12 @@ int run_single_region(const Args& args) {
     // ── 5. Build unitig graph ───────────────────────────────────────
     spdlog::info("Building unitig graph");
     sharda::UnitigGraph ug;
+    StageTimer unitig_timer("build unitig graph");
     if (!ug.build(graph)) {
         spdlog::error("Unitig graph has cycles — aborting");
         return 1;
     }
+    unitig_timer.finish();
 
     std::string unitig_gfa = args.out_prefix + ".unitig.gfa";
     sharda::write_unitig_gfa(unitig_gfa, ug);
@@ -145,7 +186,9 @@ int run_single_region(const Args& args) {
 
     // ── 6. Flow decomposition ───────────────────────────────────────
     spdlog::info("Running flow decomposition (ploidy={})", args.ploidy);
+    StageTimer flow_timer("flow decomposition");
     auto paths = sharda::flow_decomposition(ug, args.ploidy);
+    flow_timer.finish();
 
     if (paths.empty()) {
         spdlog::warn("No haplotype paths found");
@@ -167,6 +210,7 @@ int run_single_region(const Args& args) {
     std::string out_fasta = args.out_prefix + ".haplotypes.fa";
     sharda::write_fasta(out_fasta, fasta_entries);
     spdlog::info("Output: {}", out_fasta);
+    total_timer.finish();
     return 0;
 }
 

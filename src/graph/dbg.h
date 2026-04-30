@@ -30,6 +30,8 @@ public:
     /// All nodes.
     const std::vector<Node>& nodes() const { return nodes_; }
     size_t node_count() const { return nodes_.size(); }
+    size_t active_node_count() const;
+    bool is_node_removed(uint64_t node_id) const;
 
     /// Lookup backbone node by ref_pos.  Returns UINT64_MAX if not found.
     uint64_t backbone_node_at(int32_t ref_pos) const;
