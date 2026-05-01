@@ -104,9 +104,10 @@ Add `-t tandem_repeats.bed` to enable tandem repeat-aware IRR anchoring.
 
 The repository includes a small example dataset under
 `resources/example_resources/eg1` built from `chr5:70954000-70956000` of
-GRCh38. The example simulates a heterozygous 900 bp deletion over the interval
-`[70954500, 70955400)` and provides the aligned reads in the format required by
-single-region mode.
+GRCh38. The example simulates a heterozygous sample with a 900 bp deletion over
+`[70954500, 70955400)`, plus three SNPs, one 1 bp deletion, and one 1 bp
+insertion split across the two haplotypes. The aligned reads are provided in
+the format required by single-region mode.
 
 Run Sharda on the example with:
 
@@ -133,14 +134,19 @@ Relevant example files:
 
 - `resources/example_resources/eg1/example_region.fasta` — extracted reference
   region used as the assembly backbone.
-- `resources/example_resources/eg1/example_region_del_het.fa` — deleted
-  haplotype truth sequence.
+- `resources/example_resources/eg1/example_region_ref_smallvars.fa` —
+  reference-like haplotype carrying two SNPs and one 1 bp deletion.
+- `resources/example_resources/eg1/example_region_del_smallvars.fa` — deleted
+  haplotype carrying the 900 bp deletion, one SNP, and one 1 bp insertion.
 - `resources/example_resources/eg1/example_sample_truth.fa` — diploid truth
-  FASTA containing the reference and deleted haplotypes.
+  FASTA containing both variant-bearing haplotypes.
 - `resources/example_resources/eg1/results/example_reads.coord.bam` —
   coordinate-sorted BAM for inspection and downstream evaluation.
 - `resources/example_resources/eg1/results/example_reads.namesorted.bam` —
   name-sorted BAM consumed by Sharda single-region mode.
+- `resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam` —
+  coordinate-sorted indexed BAM of the truth haplotypes mapped to the example
+  reference for IGV visualization.
 
 For the exact commands used to generate the example data, see
 `doc/data/eg1/README.md`. For the current evaluation result on this dataset,

@@ -13,17 +13,22 @@ example.
 
 The extracted region is `chr5:70954000-70956000`.
 
-## Deleted Haplotype Construction
+## Truth Haplotype Construction
 
-The example uses a heterozygous deletion covering the half-open interval
-`[70954500, 70955400)`, which removes 900 bp from the 2001 bp reference region.
+The example uses a heterozygous sample with these truth variants:
 
-The deleted haplotype FASTA was created from the extracted region by removing
-bases `500..1399` in 0-based coordinates relative to the extracted sequence.
+- Reference-like haplotype:
+  `chr5:70954120 C>G`, `chr5:70954286 G>T`, `chr5:70954451 delT`
+- Deleted haplotype:
+  `chr5:70954500-70955399 del`, `chr5:70955464 T>C`, `chr5:70955731 insA`
+
+The large deletion removes the half-open interval `[70954500, 70955400)`, which
+is 900 bp from the 2001 bp reference region.
 
 Generated files:
 
-- `resources/example_resources/eg1/example_region_del_het.fa`
+- `resources/example_resources/eg1/example_region_ref_smallvars.fa`
+- `resources/example_resources/eg1/example_region_del_smallvars.fa`
 - `resources/example_resources/eg1/example_sample_truth.fa`
 
 ## Read Simulation
@@ -37,12 +42,12 @@ Commands used:
 
 ```bash
 wgsim -e 0.001 -d 500 -s 50 -N 34 -1 150 -2 150 -r 0 -R 0 -X 0 -S 11 \
-  resources/example_resources/eg1/example_region.fasta \
+  resources/example_resources/eg1/example_region_ref_smallvars.fa \
   resources/example_resources/eg1/results/ref_hap_R1.fq \
   resources/example_resources/eg1/results/ref_hap_R2.fq
 
 wgsim -e 0.001 -d 500 -s 50 -N 19 -1 150 -2 150 -r 0 -R 0 -X 0 -S 29 \
-  resources/example_resources/eg1/example_region_del_het.fa \
+  resources/example_resources/eg1/example_region_del_smallvars.fa \
   resources/example_resources/eg1/results/del_hap_R1.fq \
   resources/example_resources/eg1/results/del_hap_R2.fq
 ```
@@ -77,6 +82,24 @@ samtools sort -n \
   -o resources/example_resources/eg1/results/example_reads.namesorted.bam \
   resources/example_resources/eg1/results/example_reads.raw.bam
 ```
+
+For IGV inspection of the truth haplotypes themselves, the diploid truth FASTA
+was also aligned back to the extracted reference region and converted into a
+coordinate-sorted indexed BAM:
+
+```bash
+minimap2 -ax asm5 \
+  resources/example_resources/eg1/example_region.fasta \
+  resources/example_resources/eg1/example_sample_truth.fa | \
+  samtools sort -o resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam -
+
+samtools index resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam
+```
+
+Generated IGV files:
+
+- `resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam`
+- `resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam.bai`
 
 ## Assembly Run
 
