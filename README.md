@@ -188,8 +188,12 @@ This requires:
 | `-k` | k-mer size | 121 |
 | `-o` | Output prefix | `sharda_out` |
 | `-d` | Enable debug logging and GFA output | off |
+| `--trace-read` | Persist a trace for a specific read name in debug mode | repeatable |
+| `--trace-locus` | Persist a trace for a local reference interval in debug mode | repeatable |
 | `--debug-dir` | Inspect an existing debug artifact directory | — |
 | `--debug-node` | Look up a node or unitig segment by name | — |
+| `--debug-read` | Look up a previously traced read from `read_traces.json` | — |
+| `--debug-locus` | Look up a previously traced locus from `locus_traces.json` | — |
 | `--debug-stage` | Restrict lookup to `raw`, `clean`, or `unitig` | all stages |
 
 ### Output
@@ -199,8 +203,9 @@ This requires:
   (e.g., `chr1:10000-20000_hap1_flow30`).
 - With `-d`: a debug artifact directory named `<prefix>_debug/`.
   In single-region mode it contains `raw.gfa`, `clean.gfa`, `unitig.gfa`,
-  `raw.json`, `clean.json`, `unitig.json`, `manifest.json`, and
-  `viewer.html`.
+  `raw.json`, `clean.json`, `unitig.json`, `manifest.json`, `viewer.html`,
+  and optionally `read_traces.json` and `locus_traces.json` when
+  `--trace-read` or `--trace-locus` are used.
 - In parallel mode, per-region debug output is written to
   `<prefix>_debug/<region>/`.
 
@@ -238,6 +243,64 @@ Look up a node by segment name from an existing debug artifact directory:
 
 The current lookup path reads GFA segment (`S`) lines, so node names are the
 segment IDs used in `raw.gfa`, `clean.gfa`, or `unitig.gfa`.
+
+Look up a previously traced read from persisted JSON artifacts:
+
+```bash
+./build/sharda \
+  --debug-dir /tmp/sharda_trace_demo_debug \
+  --debug-read READ_NAME
+```
+
+Look up a previously traced locus from persisted JSON artifacts:
+
+```bash
+./build/sharda \
+  --debug-dir /tmp/sharda_locus_demo_debug \
+  --debug-locus 100:50
+```
+
+These post-hoc commands print the matching JSON object from `read_traces.json`
+or `locus_traces.json`, so you can inspect a traced read or locus without
+rerunning assembly.
+
+Trace a specific read through the raw nodes it touched and the later graph
+stages:
+
+```bash
+./build/sharda \
+  -d \
+  --trace-read READ_NAME \
+  -k 55 \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o /tmp/sharda_trace_demo
+```
+
+This writes `/tmp/sharda_trace_demo_debug/read_traces.json`. Each traced read
+record includes the raw node list, whether each node was newly created or
+reused, whether it survived graph cleaning, and which unitig it maps to after
+compaction.
+
+Trace a local reference interval through the same stages:
+
+```bash
+./build/sharda \
+  -d \
+  --trace-locus 100:50 \
+  -k 55 \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o /tmp/sharda_locus_demo
+```
+
+`--trace-locus START:LENGTH` uses local coordinates relative to the supplied
+reference sequence in single-region mode. The run writes
+`/tmp/sharda_locus_demo_debug/locus_traces.json`, including the reference
+subsequence for that interval, nearby raw graph nodes, whether those nodes were
+removed during cleaning, and their unitig mapping after compaction.
 
 ## Testing
 

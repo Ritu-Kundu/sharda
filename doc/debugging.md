@@ -17,10 +17,12 @@ What the current debugging framework supports:
 - persisted JSON snapshots for structured inspection
 - a simple CLI lookup for node or unitig segment names via `--debug-dir` and
   `--debug-node`
+- targeted read tracing for named reads via `--trace-read`
+- targeted locus tracing for local reference intervals via `--trace-locus`
+- post-hoc read and locus inspection from persisted JSON artifacts
 
 What it does not yet support:
 
-- coordinate or locus lookup queries
 - post-ILP path tracing
 - a full interactive graph UI beyond the placeholder static HTML viewer
 - node history/provenance events across every mutation step
@@ -96,6 +98,83 @@ tag     TR:i:-1
 This lookup currently reads GFA segment (`S`) lines, so the node name must be
 the segment ID used in the relevant `.gfa` file.
 
+You can also inspect persisted JSON trace artifacts without rerunning the
+pipeline:
+
+```bash
+./build/sharda \
+  --debug-dir /tmp/sharda_trace_demo_debug \
+  --debug-read READ_NAME
+```
+
+```bash
+./build/sharda \
+  --debug-dir /tmp/sharda_locus_demo_debug \
+  --debug-locus 100:50
+```
+
+These post-hoc commands print the matching object from `read_traces.json` or
+`locus_traces.json`.
+
+### 4. Trace a specific read
+
+If you already know the read name you want to follow, generate artifacts with
+one or more `--trace-read` flags:
+
+```bash
+./build/sharda \
+  -d \
+  --trace-read READ_NAME \
+  -k 55 \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o /tmp/sharda_trace_demo
+```
+
+This emits `read_traces.json` in the debug directory.
+
+Each record corresponds to a traced read mate and captures:
+
+- read name and mate label
+- ORR or IRR classification
+- evidence flag and TR assignment
+- the raw node path recorded while the read was added to the DBG
+- whether each node was newly created or reused
+- whether each raw node was later removed by graph cleaning
+- the unitig ID and unitig sequence for nodes that survived compaction
+
+### 5. Trace a specific locus
+
+If you want to follow a local reference interval through the pre-ILP graph
+stages, generate artifacts with one or more `--trace-locus` flags:
+
+```bash
+./build/sharda \
+  -d \
+  --trace-locus 100:50 \
+  -k 55 \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o /tmp/sharda_locus_demo
+```
+
+The `START:LENGTH` pair uses local coordinates relative to the input reference
+sequence in single-region mode.
+
+This emits `locus_traces.json` in the debug directory.
+
+Each locus record captures:
+
+- the requested local start and length
+- the corresponding global start for whole-genome per-region runs
+- the reference subsequence for that interval
+- raw graph nodes whose reference positions overlap the interval
+- immediate neighboring raw nodes connected by one incoming or outgoing edge
+- whether each captured node survived graph cleaning
+- the unitig ID and unitig sequence for surviving nodes
+
 ## Artifact Layout
 
 In single-region mode, `-d` produces the following files in
@@ -110,6 +189,8 @@ clean.json
 unitig.json
 manifest.json
 viewer.html
+read_traces.json
+locus_traces.json
 ```
 
 ### `raw.gfa`
@@ -166,6 +247,22 @@ Small index file recording:
 Static placeholder HTML page created with each debug directory. This is not yet
 an interactive graph viewer; it exists so the artifact bundle already has a
 stable place for a future UI.
+
+### `read_traces.json`
+
+Optional artifact written only when one or more `--trace-read` flags are
+provided.
+
+It records, for each matched read mate, the node sequence that the read walked
+through during read addition and the later fate of those node IDs.
+
+### `locus_traces.json`
+
+Optional artifact written only when one or more `--trace-locus` flags are
+provided.
+
+It records the requested reference interval, the exact reference subsequence,
+the raw graph nodes around that interval, and the later fate of those node IDs.
 
 ## Artifact Formats
 
@@ -248,6 +345,83 @@ weights on link lines.
 }
 ```
 
+### Read trace JSON format
+
+`read_traces.json` currently uses this shape:
+
+```json
+{
+  "reads": [
+    {
+      "read_name": "READ_NAME",
+      "mate": "read1",
+      "read_type": "ORR",
+      "is_evidence": false,
+      "tr_id": -1,
+      "raw_nodes": [
+        {
+          "node_id": 0,
+          "sequence": "ACG...",
+          "created": false,
+          "is_backbone": true,
+          "ref_pos": 0,
+          "tr_id": -1,
+          "removed_after_clean": false,
+          "unitig_id": 0,
+          "unitig_sequence": "ACGT..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Interpretation:
+
+- `created=false` means the read reused an existing node
+- `created=true` means the read introduced a non-backbone read node
+- `removed_after_clean=true` means the node exists in the raw path but was
+  removed before unitig compaction
+- `unitig_id=null` means the node did not survive into the compacted graph
+
+### Locus trace JSON format
+
+`locus_traces.json` currently uses this shape:
+
+```json
+{
+  "loci": [
+    {
+      "local_start": 100,
+      "length": 50,
+      "global_start": 100,
+      "reference_sequence": "ACGT...",
+      "raw_nodes": [
+        {
+          "node_id": 17,
+          "sequence": "ACG...",
+          "is_backbone": true,
+          "ref_pos": 100,
+          "tr_id": -1,
+          "removed_after_clean": false,
+          "unitig_id": 3,
+          "unitig_sequence": "ACGTA..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Interpretation:
+
+- `reference_sequence` is the requested interval from the local reference
+- `raw_nodes` contains overlapping reference-positioned nodes plus one-hop graph
+  neighbors for local context
+- `removed_after_clean=true` means the node existed after read addition but did
+  not survive graph cleaning
+- `unitig_id=null` means the node did not survive into the compacted graph
+
 ## Current Query Model
 
 The current node lookup is intentionally simple.
@@ -287,6 +461,10 @@ When debugging an assembly failure or an unexpected haplotype:
    structure before ILP
 5. use `--debug-node` on any suspicious segment IDs you find while browsing the
    GFA files
+6. rerun with `--trace-read` for any specific read you want to follow through
+  the node path and later graph stages
+7. rerun with `--trace-locus` for any reference interval where you want the
+  local subsequence and surrounding graph context preserved as an artifact
 
 ## Future Extensions
 

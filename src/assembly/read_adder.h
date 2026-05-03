@@ -2,6 +2,7 @@
 
 #include "graph/dbg.h"
 #include "graph/types.h"
+#include "util/read_trace.h"
 #include <vector>
 
 namespace sharda {
@@ -10,5 +11,8 @@ namespace sharda {
 /// and adds a haplotype edge if appropriate.
 void add_read_pair(ReadPair& pair, DBG& graph,
                    const std::vector<TandemRepeat>& trs);
+void add_read_pair(ReadPair& pair, DBG& graph,
+                   const std::vector<TandemRepeat>& trs,
+                   const ReadTraceSink& trace_sink);
 
 } // namespace sharda

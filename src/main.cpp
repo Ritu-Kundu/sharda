@@ -25,6 +25,7 @@
 #include "assembly/flow_decomp.h"
 #include "assembly/region_assembler.h"
 #include "util/debug_config.h"
+#include "util/debug_query.h"
 
 namespace fs = std::filesystem;
 
@@ -65,6 +66,10 @@ struct Args {
     std::string debug_dir;
     std::string debug_node;
     std::string debug_stage;
+    std::string debug_read;
+    std::string debug_locus;
+    std::vector<std::string> trace_reads;
+    std::vector<sharda::LocusTraceRequest> trace_loci;
     int         ploidy  = 2;
     int         k       = 121;
     int         threads = 1;
@@ -73,9 +78,33 @@ struct Args {
     bool        debug  = false;
 
     bool has_debug_node_lookup() const {
-        return !debug_dir.empty() || !debug_node.empty();
+        return !debug_node.empty();
+    }
+
+    bool has_debug_read_lookup() const {
+        return !debug_read.empty();
+    }
+
+    bool has_debug_locus_lookup() const {
+        return !debug_locus.empty();
     }
 };
+
+bool parse_trace_locus_arg(const std::string& value, sharda::LocusTraceRequest& request) {
+    size_t separator = value.find(':');
+    if (separator == std::string::npos) {
+        return false;
+    }
+
+    try {
+        request.start = std::stoi(value.substr(0, separator));
+        request.length = std::stoi(value.substr(separator + 1));
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    return request.length >= 0;
+}
 
 sharda::DebugArtifactsConfig make_debug_artifacts_config(const Args& args) {
     sharda::DebugArtifactsConfig config;
@@ -85,6 +114,8 @@ sharda::DebugArtifactsConfig make_debug_artifacts_config(const Args& args) {
 
     config.enabled = true;
     config.output_dir = args.out_prefix + "_debug";
+    config.traced_reads = args.trace_reads;
+    config.traced_loci = args.trace_loci;
     return config;
 }
 
@@ -93,8 +124,9 @@ void usage(const char* prog) {
               << " -r <ref.fa> -b <reads.bam> -p <ploidy>\n"
               << "       [-R <targets.bed>] [-j threads] [-f padding]\n"
               << "       [-t <repeats.bed>]\n"
-              << "       [-k kmer_size] [-o out_prefix] [-d]\n"
+              << "       [-k kmer_size] [-o out_prefix] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
               << "       [--debug-dir <dir> --debug-node <name> [--debug-stage <stage>]]\n"
+              << "       [--debug-dir <dir> --debug-read <name>] [--debug-dir <dir> --debug-locus <start:length>]\n"
               << "\n"
               << "  -r  Reference FASTA (indexed .fai required for -R mode)\n"
               << "  -b  BAM file (name-sorted for single-region mode;\n"
@@ -107,8 +139,12 @@ void usage(const char* prog) {
               << "  -k  Kmer size (default: 121)\n"
               << "  -o  Output prefix (default: sharda_out)\n"
               << "  -d  Debug logging\n"
+              << "  --trace-read   Trace a named read through raw, clean, and unitig stages\n"
+              << "  --trace-locus  Trace a local reference interval through raw, clean, and unitig stages\n"
               << "  --debug-dir    Inspect an existing debug artifact directory\n"
               << "  --debug-node   Look up a node/segment name in debug GFA output\n"
+              << "  --debug-read   Look up a traced read in read_traces.json\n"
+              << "  --debug-locus  Look up a traced locus in locus_traces.json using start:length\n"
               << "  --debug-stage  Restrict lookup to raw, clean, or unitig\n";
 }
 
@@ -202,6 +238,48 @@ int run_debug_node_lookup(const Args& args) {
     return 1;
 }
 
+int run_debug_read_lookup(const Args& args) {
+    if (args.debug_dir.empty() || args.debug_read.empty()) {
+        std::cerr << "Error: --debug-dir and --debug-read must be provided together\n";
+        return 1;
+    }
+
+    std::string artifact_path = (fs::path(args.debug_dir) / "read_traces.json").string();
+    auto object = sharda::debug_query_find_read_trace_object(
+        sharda::debug_query_read_text_file(artifact_path), args.debug_read);
+    if (!object) {
+        std::cerr << "Error: read " << args.debug_read << " not found in " << artifact_path << '\n';
+        return 1;
+    }
+
+    std::cout << *object << '\n';
+    return 0;
+}
+
+int run_debug_locus_lookup(const Args& args) {
+    if (args.debug_dir.empty() || args.debug_locus.empty()) {
+        std::cerr << "Error: --debug-dir and --debug-locus must be provided together\n";
+        return 1;
+    }
+
+    sharda::LocusTraceRequest request;
+    if (!parse_trace_locus_arg(args.debug_locus, request)) {
+        std::cerr << "Error: --debug-locus must be start:length\n";
+        return 1;
+    }
+
+    std::string artifact_path = (fs::path(args.debug_dir) / "locus_traces.json").string();
+    auto object = sharda::debug_query_find_locus_trace_object(
+        sharda::debug_query_read_text_file(artifact_path), request.start, request.length);
+    if (!object) {
+        std::cerr << "Error: locus " << args.debug_locus << " not found in " << artifact_path << '\n';
+        return 1;
+    }
+
+    std::cout << *object << '\n';
+    return 0;
+}
+
 Args parse_args(int argc, char* argv[]) {
     Args a;
     for (int i = 1; i < argc; ++i) {
@@ -215,12 +293,31 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-j" && i + 1 < argc) a.threads = std::stoi(argv[++i]);
         else if (arg == "-f" && i + 1 < argc) a.padding = std::stoi(argv[++i]);
         else if (arg == "-o" && i + 1 < argc) a.out_prefix = argv[++i];
+        else if (arg == "--trace-read" && i + 1 < argc) a.trace_reads.push_back(argv[++i]);
+        else if (arg == "--trace-locus" && i + 1 < argc) {
+            sharda::LocusTraceRequest request;
+            if (!parse_trace_locus_arg(argv[++i], request)) {
+                std::cerr << "Error: --trace-locus must be start:length\n";
+                std::exit(1);
+            }
+            a.trace_loci.push_back(request);
+        }
         else if (arg == "--debug-dir" && i + 1 < argc) a.debug_dir = argv[++i];
         else if (arg == "--debug-node" && i + 1 < argc) a.debug_node = argv[++i];
+        else if (arg == "--debug-read" && i + 1 < argc) a.debug_read = argv[++i];
+        else if (arg == "--debug-locus" && i + 1 < argc) a.debug_locus = argv[++i];
         else if (arg == "--debug-stage" && i + 1 < argc) a.debug_stage = argv[++i];
         else if (arg == "-d") a.debug = true;
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); std::exit(0); }
         else { std::cerr << "Unknown arg: " << arg << '\n'; usage(argv[0]); std::exit(1); }
+    }
+    int debug_query_modes = 0;
+    debug_query_modes += a.has_debug_node_lookup() ? 1 : 0;
+    debug_query_modes += a.has_debug_read_lookup() ? 1 : 0;
+    debug_query_modes += a.has_debug_locus_lookup() ? 1 : 0;
+    if (debug_query_modes > 1) {
+        std::cerr << "Error: choose only one of --debug-node, --debug-read, or --debug-locus\n";
+        std::exit(1);
     }
     if (a.has_debug_node_lookup()) {
         if (a.debug_dir.empty() || a.debug_node.empty()) {
@@ -234,6 +331,31 @@ Args parse_args(int argc, char* argv[]) {
             std::exit(1);
         }
         return a;
+    }
+    if (a.has_debug_read_lookup()) {
+        if (a.debug_dir.empty() || a.debug_read.empty()) {
+            std::cerr << "Error: --debug-dir and --debug-read must be used together\n";
+            usage(argv[0]);
+            std::exit(1);
+        }
+        return a;
+    }
+    if (a.has_debug_locus_lookup()) {
+        if (a.debug_dir.empty() || a.debug_locus.empty()) {
+            std::cerr << "Error: --debug-dir and --debug-locus must be used together\n";
+            usage(argv[0]);
+            std::exit(1);
+        }
+        sharda::LocusTraceRequest request;
+        if (!parse_trace_locus_arg(a.debug_locus, request)) {
+            std::cerr << "Error: --debug-locus must be start:length\n";
+            std::exit(1);
+        }
+        return a;
+    }
+    if ((!a.trace_reads.empty() || !a.trace_loci.empty()) && !a.debug) {
+        std::cerr << "Error: --trace-read and --trace-locus require -d so artifacts can be written\n";
+        std::exit(1);
     }
     if (a.ref_fasta.empty() || a.bam.empty()) {
         std::cerr << "Error: -r and -b are required\n";
@@ -270,6 +392,9 @@ int run_single_region(const Args& args) {
     spdlog::info("Building backbone (k={})", args.k);
     sharda::DBG graph(args.k);
     auto debug_artifacts = make_debug_artifacts_config(args);
+    std::vector<sharda::ReadTraceRecord> read_traces;
+    sharda::ReadTraceSink trace_sink{&debug_artifacts.traced_reads, &read_traces};
+    std::vector<sharda::LocusTraceRecord> locus_traces;
     StageTimer backbone_timer("build backbone");
     sharda::build_backbone(graph, ref_seq, trs);
     backbone_timer.finish();
@@ -279,7 +404,7 @@ int run_single_region(const Args& args) {
     uint64_t read_pairs = 0;
     StageTimer read_timer("add reads");
     sharda::iterate_read_pairs(args.bam, [&](sharda::ReadPair&& pair) {
-        sharda::add_read_pair(pair, graph, trs);
+        sharda::add_read_pair(pair, graph, trs, trace_sink);
         read_pairs++;
     });
     read_timer.finish();
@@ -287,6 +412,13 @@ int run_single_region(const Args& args) {
     spdlog::info("Graph after read addition: {} nodes, {} edges, {} hap_edges",
                  graph.node_count(), graph.edge_count(),
                  graph.haplotype_edges().size());
+
+    if (debug_artifacts.should_trace_loci()) {
+        locus_traces = sharda::collect_locus_traces(debug_artifacts.traced_loci,
+                                                    ref_seq,
+                                                    0,
+                                                    graph);
+    }
 
     if (debug_artifacts.should_write()) {
         sharda::write_dbg_debug_artifacts(debug_artifacts, "raw", graph);
@@ -322,6 +454,15 @@ int run_single_region(const Args& args) {
         return 1;
     }
     unitig_timer.finish();
+
+    if (debug_artifacts.should_trace_reads()) {
+        sharda::finalize_read_traces(read_traces, graph, ug);
+        sharda::write_read_trace_artifacts(debug_artifacts, read_traces);
+    }
+    if (debug_artifacts.should_trace_loci()) {
+        sharda::finalize_locus_traces(locus_traces, graph, ug);
+        sharda::write_locus_trace_artifacts(debug_artifacts, locus_traces);
+    }
 
     if (debug_artifacts.should_write()) {
         sharda::write_unitig_debug_artifacts(debug_artifacts, "unitig", ug);
@@ -529,6 +670,12 @@ int main(int argc, char* argv[]) {
     auto args = parse_args(argc, argv);
     if (args.has_debug_node_lookup()) {
         return run_debug_node_lookup(args);
+    }
+    if (args.has_debug_read_lookup()) {
+        return run_debug_read_lookup(args);
+    }
+    if (args.has_debug_locus_lookup()) {
+        return run_debug_locus_lookup(args);
     }
     sharda::init_logging(args.debug);
 

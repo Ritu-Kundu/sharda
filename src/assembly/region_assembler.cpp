@@ -18,6 +18,9 @@ namespace sharda {
 RegionResult assemble_region(const RegionParams& params) {
     RegionResult result;
     result.region_name = params.region_name;
+    std::vector<ReadTraceRecord> read_traces;
+    ReadTraceSink trace_sink{&params.debug_artifacts.traced_reads, &read_traces};
+    std::vector<LocusTraceRecord> locus_traces;
 
     try {
         // ── 1. Build backbone ───────────────────────────────────────
@@ -35,12 +38,19 @@ RegionResult assemble_region(const RegionParams& params) {
             pair.read1.ref_end   -= params.coord_offset;
             pair.read2.ref_start -= params.coord_offset;
             pair.read2.ref_end   -= params.coord_offset;
-            add_read_pair(pair, graph, params.trs);
+            add_read_pair(pair, graph, params.trs, trace_sink);
             read_pairs++;
         });
         spdlog::info("[{}] Added {} read pairs, {} nodes, {} edges",
                      params.region_name, read_pairs,
                      graph.node_count(), graph.edge_count());
+
+        if (params.debug_artifacts.should_trace_loci()) {
+            locus_traces = collect_locus_traces(params.debug_artifacts.traced_loci,
+                                                params.ref_seq,
+                                                params.coord_offset,
+                                                graph);
+        }
 
         if (params.debug_artifacts.should_write()) {
             write_dbg_debug_artifacts(params.debug_artifacts, "raw", graph);
@@ -67,6 +77,15 @@ RegionResult assemble_region(const RegionParams& params) {
             result.error = "Unitig graph has cycles";
             spdlog::warn("[{}] {}", params.region_name, result.error);
             return result;
+        }
+
+        if (params.debug_artifacts.should_trace_reads()) {
+            finalize_read_traces(read_traces, graph, ug);
+            write_read_trace_artifacts(params.debug_artifacts, read_traces);
+        }
+        if (params.debug_artifacts.should_trace_loci()) {
+            finalize_locus_traces(locus_traces, graph, ug);
+            write_locus_trace_artifacts(params.debug_artifacts, locus_traces);
         }
 
         if (params.debug_artifacts.should_write()) {

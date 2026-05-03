@@ -5,12 +5,14 @@
 #include "io/debug_artifacts.h"
 #include "io/fasta_writer.h"
 #include "io/gfa_writer.h"
+#include "util/debug_query.h"
 #include "graph/types.h"
 #include "graph/dbg.h"
 #include "graph/backbone.h"
 #include "graph/unitig_graph.h"
 #include "assembly/read_classifier.h"
 #include "assembly/anchor_chain.h"
+#include "assembly/read_adder.h"
 #include "assembly/graph_cleaner.h"
 
 #include <fstream>
@@ -206,6 +208,133 @@ TEST_F(TempFileTest, UnitigJsonIncludesNodeIds) {
                         std::istreambuf_iterator<char>());
     EXPECT_NE(content.find("\"graph_kind\": \"unitig\""), std::string::npos);
     EXPECT_NE(content.find("\"node_ids\""), std::string::npos);
+}
+
+TEST(ReadTrace, CapturesRawNodesAndUnitigMapping) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    sharda::ReadPair pair;
+    pair.read1.name = "trace_me";
+    pair.read1.seq = "ACGTAC";
+    pair.read1.cigar = {{sharda::CigarOp::M, 6}};
+    pair.read1.ref_start = 0;
+    pair.read1.ref_end = 6;
+    pair.read1.flag = 0x43;
+    pair.read2.name = "trace_me";
+    pair.read2.seq = "CGTACG";
+    pair.read2.cigar = {{sharda::CigarOp::M, 6}};
+    pair.read2.ref_start = 1;
+    pair.read2.ref_end = 7;
+    pair.read2.flag = 0x83;
+
+    std::vector<std::string> traced_reads = {"trace_me"};
+    std::vector<sharda::ReadTraceRecord> traces;
+    sharda::ReadTraceSink trace_sink{&traced_reads, &traces};
+
+    sharda::add_read_pair(pair, graph, {}, trace_sink);
+
+    ASSERT_EQ(traces.size(), 2u);
+    ASSERT_FALSE(traces[0].raw_nodes.empty());
+    EXPECT_EQ(traces[0].read_name, "trace_me");
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+    sharda::finalize_read_traces(traces, graph, ug);
+
+    EXPECT_FALSE(traces[0].raw_nodes[0].removed_after_clean);
+    EXPECT_NE(traces[0].raw_nodes[0].unitig_id, UINT64_MAX);
+}
+
+TEST_F(TempFileTest, ReadTraceArtifactsWriteJson) {
+    sharda::DebugArtifactsConfig config;
+    config.enabled = true;
+    config.output_dir = tmp_path("debug_artifacts");
+    config.traced_reads = {"trace_me"};
+
+    std::vector<sharda::ReadTraceRecord> traces = {{
+        "trace_me",
+        "read1",
+        "ORR",
+        false,
+        -1,
+        {{0, "ACG", true, false, -1, -1, false, 0, "ACGT"}}
+    }};
+
+    sharda::write_read_trace_artifacts(config, traces);
+
+    std::ifstream in(fs::path(config.output_dir) / "read_traces.json");
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"read_name\": \"trace_me\""), std::string::npos);
+    EXPECT_NE(content.find("\"unitig_id\": 0"), std::string::npos);
+}
+
+TEST(LocusTrace, CapturesReferenceIntervalAndUnitigMapping) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    auto traces = sharda::collect_locus_traces({{1, 3}}, "ACGTAC", 0, graph);
+    ASSERT_EQ(traces.size(), 1u);
+    EXPECT_EQ(traces[0].reference_sequence, "CGT");
+    ASSERT_FALSE(traces[0].raw_nodes.empty());
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+    sharda::finalize_locus_traces(traces, graph, ug);
+
+    EXPECT_NE(traces[0].raw_nodes[0].unitig_id, UINT64_MAX);
+}
+
+TEST_F(TempFileTest, LocusTraceArtifactsWriteJson) {
+    sharda::DebugArtifactsConfig config;
+    config.enabled = true;
+    config.output_dir = tmp_path("debug_artifacts");
+    config.traced_loci = {{10, 5}};
+
+    std::vector<sharda::LocusTraceRecord> traces = {{
+        10,
+        5,
+        10,
+        "ACGTA",
+        {{0, "ACG", true, 10, -1, false, 0, "ACGT"}}
+    }};
+
+    sharda::write_locus_trace_artifacts(config, traces);
+
+    std::ifstream in(fs::path(config.output_dir) / "locus_traces.json");
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"reference_sequence\": \"ACGTA\""), std::string::npos);
+    EXPECT_NE(content.find("\"global_start\": 10"), std::string::npos);
+}
+
+TEST(DebugQuery, FindsReadTraceObject) {
+        std::string text = R"JSON({
+    "reads": [
+        {"read_name": "read_a", "mate": "read1", "raw_nodes": []},
+        {"read_name": "read_b", "mate": "read2", "raw_nodes": [{"node_id": 7}]}
+    ]
+})JSON";
+
+        auto object = sharda::debug_query_find_read_trace_object(text, "read_b");
+        ASSERT_TRUE(object.has_value());
+        EXPECT_NE(object->find("\"read_name\": \"read_b\""), std::string::npos);
+        EXPECT_NE(object->find("\"node_id\": 7"), std::string::npos);
+}
+
+TEST(DebugQuery, FindsLocusTraceObject) {
+        std::string text = R"JSON({
+    "loci": [
+        {"local_start": 10, "length": 25, "reference_sequence": "AAAA", "raw_nodes": []},
+        {"local_start": 100, "length": 50, "reference_sequence": "CCCC", "raw_nodes": [{"node_id": 4}]}
+    ]
+})JSON";
+
+        auto object = sharda::debug_query_find_locus_trace_object(text, 100, 50);
+        ASSERT_TRUE(object.has_value());
+        EXPECT_NE(object->find("\"local_start\": 100"), std::string::npos);
+        EXPECT_NE(object->find("\"node_id\": 4"), std::string::npos);
 }
 
 // ── Read classifier test ────────────────────────────────────────────────────
