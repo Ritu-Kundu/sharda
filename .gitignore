@@ -33,3 +33,4 @@ compile_commands.json
 *.haplotypes.fa
 *_debug/
 sharda_out*
+/resources/example_resources/eg1/results/sharda_eg1_*

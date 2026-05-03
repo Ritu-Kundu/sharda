@@ -188,14 +188,56 @@ This requires:
 | `-k` | k-mer size | 121 |
 | `-o` | Output prefix | `sharda_out` |
 | `-d` | Enable debug logging and GFA output | off |
+| `--debug-dir` | Inspect an existing debug artifact directory | — |
+| `--debug-node` | Look up a node or unitig segment by name | — |
+| `--debug-stage` | Restrict lookup to `raw`, `clean`, or `unitig` | all stages |
 
 ### Output
 
 - `<prefix>.haplotypes.fa` — assembled haplotype sequences.
   In whole-genome mode, contig names embed region coordinates
   (e.g., `chr1:10000-20000_hap1_flow30`).
-- With `-d`: GFA files for the raw, cleaned, and unitig graphs. In parallel
-  mode, per-region debug output is written to `<prefix>_debug/<region>/`.
+- With `-d`: a debug artifact directory named `<prefix>_debug/`.
+  In single-region mode it contains `raw.gfa`, `clean.gfa`, `unitig.gfa`,
+  `raw.json`, `clean.json`, `unitig.json`, `manifest.json`, and
+  `viewer.html`.
+- In parallel mode, per-region debug output is written to
+  `<prefix>_debug/<region>/`.
+
+### Debugging
+
+For a fuller debugging workflow and artifact format description, see
+[doc/debugging.md](doc/debugging.md).
+
+Generate debug artifacts for a single-region run:
+
+```bash
+./build/sharda \
+  -d \
+  -k 55 \
+  -r resources/example_resources/eg1/example_region.fasta \
+  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o /tmp/sharda_debug_demo
+```
+
+This writes `/tmp/sharda_debug_demo_debug/` with both compatibility GFA files
+and structured JSON snapshots for the raw, cleaned, and unitig graphs.
+
+Look up a node by segment name from an existing debug artifact directory:
+
+```bash
+./build/sharda \
+  --debug-dir /tmp/sharda_debug_demo_debug \
+  --debug-node 0 \
+  --debug-stage raw
+```
+
+`--debug-stage` is optional. If omitted, the command searches `raw`, then
+`clean`, then `unitig`.
+
+The current lookup path reads GFA segment (`S`) lines, so node names are the
+segment IDs used in `raw.gfa`, `clean.gfa`, or `unitig.gfa`.
 
 ## Testing
 
@@ -219,7 +261,8 @@ src/
     fasta_writer.h / .cpp     FASTA output
     bam_reader.h / .cpp       BAM iteration, pairing, and region extraction
     bed_reader.h / .cpp       BED parsing for TRs and target regions
-    gfa_writer.h / .cpp       GFA1 debug output
+    debug_artifacts.h         Debug artifact emission interface
+    gfa_writer.h / .cpp       GFA1 and JSON debug graph output
   assembly/
     read_classifier.h / .cpp  ORR/IRR classification and evidence detection
     anchor_chain.h / .cpp     Anchor finding and chaining for IRRs
@@ -230,9 +273,11 @@ src/
   util/
     kmer.h / kmer.cpp         k-mer extraction
     log.h                     spdlog initialisation
+    debug_config.h            Debug artifact configuration
 tests/
   test_all.cpp                Unit tests (GoogleTest)
 doc/
+  debugging.md               Debug workflow and artifact format guide
   method.md                   Algorithm description
   implementation.md           Implementation details
 ```

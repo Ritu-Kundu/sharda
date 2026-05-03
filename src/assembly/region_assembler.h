@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graph/types.h"
+#include "util/debug_config.h"
 #include <string>
 #include <vector>
 #include <utility>
@@ -18,6 +19,7 @@ struct RegionParams {
     int         k       = 121;
     bool        debug   = false;
     std::string debug_dir;    // if non-empty, write GFA files here
+    DebugArtifactsConfig debug_artifacts;
 };
 
 /// Result from assembling a single region.

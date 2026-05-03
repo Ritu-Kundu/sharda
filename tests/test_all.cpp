@@ -2,7 +2,9 @@
 #include "util/kmer.h"
 #include "io/fasta_reader.h"
 #include "io/bed_reader.h"
+#include "io/debug_artifacts.h"
 #include "io/fasta_writer.h"
+#include "io/gfa_writer.h"
 #include "graph/types.h"
 #include "graph/dbg.h"
 #include "graph/backbone.h"
@@ -165,6 +167,45 @@ TEST(DBG, HaplotypeEdges) {
     ASSERT_EQ(graph.haplotype_edges().size(), 1u);
     EXPECT_EQ(graph.haplotype_edges()[0].from_node, a);
     EXPECT_EQ(graph.haplotype_edges()[0].to_node, b);
+}
+
+TEST_F(TempFileTest, DebugArtifactsWriteJsonAndViewer) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    sharda::DebugArtifactsConfig config;
+    config.enabled = true;
+    config.output_dir = tmp_path("debug_artifacts");
+
+    sharda::write_dbg_debug_artifacts(config, "raw", graph);
+
+    EXPECT_TRUE(fs::exists(fs::path(config.output_dir) / "raw.json"));
+    EXPECT_TRUE(fs::exists(fs::path(config.output_dir) / "raw.gfa"));
+    EXPECT_TRUE(fs::exists(fs::path(config.output_dir) / "manifest.json"));
+    EXPECT_TRUE(fs::exists(fs::path(config.output_dir) / "viewer.html"));
+
+    std::ifstream in(fs::path(config.output_dir) / "raw.json");
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"graph_kind\": \"dbg\""), std::string::npos);
+    EXPECT_NE(content.find("\"sequence\": \"ACG\""), std::string::npos);
+}
+
+TEST_F(TempFileTest, UnitigJsonIncludesNodeIds) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    std::string path = tmp_path("unitig.json");
+    sharda::write_unitig_json(path, ug);
+
+    std::ifstream in(path);
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"graph_kind\": \"unitig\""), std::string::npos);
+    EXPECT_NE(content.find("\"node_ids\""), std::string::npos);
 }
 
 // ── Read classifier test ────────────────────────────────────────────────────

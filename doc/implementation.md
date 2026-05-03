@@ -3,6 +3,9 @@
 This document describes the code architecture, module-by-module design, data
 flow, and build system of Sharda.
 
+For user-facing debug workflow and artifact format details, see
+`doc/debugging.md`.
+
 ---
 
 ## Build system
@@ -138,10 +141,24 @@ TR annotations and the rest of the pipeline receives an empty `trs` vector.
 `write_fasta(path, sequences)` — writes sequences with 80-character line
 wrapping.
 
+### `src/io/debug_artifacts.h`
+
+Thin orchestration layer for persisted debug outputs.
+
+- `ensure_debug_output_dir(config)` — creates the artifact directory and emits
+  a lightweight static `viewer.html` placeholder.
+- `write_dbg_debug_artifacts(config, stage_name, graph)` — writes a stage's DBG
+  artifacts (`<stage>.gfa`, `<stage>.json`) plus `manifest.json`.
+- `write_unitig_debug_artifacts(config, stage_name, graph)` — writes the same
+  artifact set for the compacted unitig graph.
+
 ### `src/io/gfa_writer.h / gfa_writer.cpp`
 
 - `write_gfa(path, graph)` — GFA1 output from a `DBG`.
+- `write_dbg_json(path, graph)` — structured JSON snapshot from a `DBG`.
 - `write_unitig_gfa(path, unitig_graph)` — GFA1 output from a `UnitigGraph`.
+- `write_unitig_json(path, unitig_graph)` — structured JSON snapshot from a
+  `UnitigGraph`.
 
 ### `src/assembly/read_classifier.h / read_classifier.cpp`
 
@@ -239,11 +256,20 @@ pipeline:
 4. Cleans graph.
 5. Builds unitig graph; checks for cycles.
 6. Runs flow decomposition.
-7. Writes FASTA + optional debug GFA.
+7. Writes FASTA + optional debug artifacts.
 8. Adjusts output coordinates by adding the region's genomic offset.
 
 `RegionParams` captures all inputs: reference path, BAM path, TRs, ploidy,
-k-mer size, output prefix, debug flag, and optional region coordinates.
+k-mer size, output prefix, debug flag, debug artifact configuration, and
+optional region coordinates.
+
+### `src/util/debug_config.h`
+
+`DebugArtifactsConfig` centralises the first-pass debugging framework options:
+
+- whether artifact emission is enabled
+- output directory for persisted artifacts
+- whether to emit GFA, JSON, and the static HTML viewer
 
 ### `src/util/kmer.h / kmer.cpp`
 
@@ -257,7 +283,16 @@ info level otherwise.
 
 ### `src/main.cpp` — Entry point
 
-Parses CLI arguments via `getopt`, then branches:
+Parses CLI arguments, then branches into one of three modes:
+
+1. node lookup from an existing debug artifact directory via `--debug-dir` and
+  `--debug-node`
+2. whole-genome parallel assembly when `-R` is provided
+3. single-region assembly otherwise
+
+In debug mode, the single-region and per-region whole-genome paths emit a
+persisted artifact bundle under `<out_prefix>_debug/` containing GFA snapshots,
+JSON snapshots, a manifest, and a lightweight static HTML viewer.
 
 - **Single-region mode** (no `-R` flag): calls the pipeline directly with the
   provided files.

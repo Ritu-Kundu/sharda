@@ -32,8 +32,8 @@ This example was generated on 2026-04-30 from the extracted region in
 - Diploid truth FASTA: `resources/example_resources/eg1/example_sample_truth.fa`
 - Truth haplotypes aligned to the example reference for IGV:
   `resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam`
-- Simulated reads: `resources/example_resources/eg1/results/example_reads_R1.fq`
-  and `resources/example_resources/eg1/results/example_reads_R2.fq`
+- Simulated reads: `resources/example_resources/eg1/reads/example_reads_R1.fq`
+  and `resources/example_resources/eg1/reads/example_reads_R2.fq`
 - Coordinate-sorted BAM: `resources/example_resources/eg1/results/example_reads.coord.bam`
 - Name-sorted BAM for Sharda:
   `resources/example_resources/eg1/results/example_reads.namesorted.bam`

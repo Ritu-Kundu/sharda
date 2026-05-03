@@ -43,20 +43,20 @@ Commands used:
 ```bash
 wgsim -e 0.001 -d 500 -s 50 -N 34 -1 150 -2 150 -r 0 -R 0 -X 0 -S 11 \
   resources/example_resources/eg1/example_region_ref_smallvars.fa \
-  resources/example_resources/eg1/results/ref_hap_R1.fq \
-  resources/example_resources/eg1/results/ref_hap_R2.fq
+  resources/example_resources/eg1/reads/ref_hap_R1.fq \
+  resources/example_resources/eg1/reads/ref_hap_R2.fq
 
 wgsim -e 0.001 -d 500 -s 50 -N 19 -1 150 -2 150 -r 0 -R 0 -X 0 -S 29 \
   resources/example_resources/eg1/example_region_del_smallvars.fa \
-  resources/example_resources/eg1/results/del_hap_R1.fq \
-  resources/example_resources/eg1/results/del_hap_R2.fq
+  resources/example_resources/eg1/reads/del_hap_R1.fq \
+  resources/example_resources/eg1/reads/del_hap_R2.fq
 ```
 
 The final mixed FASTQs were built by prefixing read names with `ref_` or `del_`
 and concatenating the two haplotype-specific read sets into:
 
-- `resources/example_resources/eg1/results/example_reads_R1.fq`
-- `resources/example_resources/eg1/results/example_reads_R2.fq`
+- `resources/example_resources/eg1/reads/example_reads_R1.fq`
+- `resources/example_resources/eg1/reads/example_reads_R2.fq`
 
 ## Alignment and BAM Creation
 
@@ -68,8 +68,8 @@ Commands used:
 ```bash
 minimap2 -ax sr \
   resources/example_resources/eg1/example_region.fasta \
-  resources/example_resources/eg1/results/example_reads_R1.fq \
-  resources/example_resources/eg1/results/example_reads_R2.fq | \
+  resources/example_resources/eg1/reads/example_reads_R1.fq \
+  resources/example_resources/eg1/reads/example_reads_R2.fq | \
   samtools view -b -o resources/example_resources/eg1/results/example_reads.raw.bam -
 
 samtools sort \
@@ -117,3 +117,8 @@ Sharda was run in single-region mode with ploidy 2 and `k=45`:
 
 This run produced graph GFA outputs and a haplotype FASTA. The detailed run
 result is summarized in `resources/example_resources/eg1/evaluation.md`.
+
+The `results/` directory is reserved for derived BAMs and local Sharda run
+outputs. The generated FASTQ inputs live under
+`resources/example_resources/eg1/reads/`, and `resources/example_resources/eg1/results/sharda_eg1_*`
+is ignored in git so local assembly artifacts stay untracked.

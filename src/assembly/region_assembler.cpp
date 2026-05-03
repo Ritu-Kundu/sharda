@@ -3,6 +3,7 @@
 #include "graph/backbone.h"
 #include "graph/unitig_graph.h"
 #include "io/bam_reader.h"
+#include "io/debug_artifacts.h"
 #include "io/gfa_writer.h"
 #include "assembly/read_adder.h"
 #include "assembly/graph_cleaner.h"
@@ -41,8 +42,9 @@ RegionResult assemble_region(const RegionParams& params) {
                      params.region_name, read_pairs,
                      graph.node_count(), graph.edge_count());
 
-        // Debug GFA output
-        if (!params.debug_dir.empty()) {
+        if (params.debug_artifacts.should_write()) {
+            write_dbg_debug_artifacts(params.debug_artifacts, "raw", graph);
+        } else if (!params.debug_dir.empty()) {
             fs::create_directories(params.debug_dir);
             write_gfa(params.debug_dir + "/raw.gfa", graph);
         }
@@ -52,7 +54,9 @@ RegionResult assemble_region(const RegionParams& params) {
         int mean_read_len = 150; // TODO: compute from actual reads
         clean_graph(graph, mean_read_len);
 
-        if (!params.debug_dir.empty()) {
+        if (params.debug_artifacts.should_write()) {
+            write_dbg_debug_artifacts(params.debug_artifacts, "clean", graph);
+        } else if (!params.debug_dir.empty()) {
             write_gfa(params.debug_dir + "/clean.gfa", graph);
         }
 
@@ -65,7 +69,9 @@ RegionResult assemble_region(const RegionParams& params) {
             return result;
         }
 
-        if (!params.debug_dir.empty()) {
+        if (params.debug_artifacts.should_write()) {
+            write_unitig_debug_artifacts(params.debug_artifacts, "unitig", ug);
+        } else if (!params.debug_dir.empty()) {
             write_unitig_gfa(params.debug_dir + "/unitig.gfa", ug);
         }
 

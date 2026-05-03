@@ -5,12 +5,15 @@
 #include <mutex>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 #include "util/log.h"
 #include "io/fasta_reader.h"
 #include "io/bed_reader.h"
 #include "io/bam_reader.h"
+#include "io/debug_artifacts.h"
 #include "io/fasta_writer.h"
 #include "io/gfa_writer.h"
 #include "graph/types.h"
@@ -21,6 +24,7 @@
 #include "assembly/graph_cleaner.h"
 #include "assembly/flow_decomp.h"
 #include "assembly/region_assembler.h"
+#include "util/debug_config.h"
 
 namespace fs = std::filesystem;
 
@@ -58,13 +62,31 @@ struct Args {
     std::string bam;
     std::string bed;          // TR BED
     std::string targets_bed;  // target regions BED (whole-genome mode)
+    std::string debug_dir;
+    std::string debug_node;
+    std::string debug_stage;
     int         ploidy  = 2;
     int         k       = 121;
     int         threads = 1;
     int         padding = 1000;
     std::string out_prefix = "sharda_out";
     bool        debug  = false;
+
+    bool has_debug_node_lookup() const {
+        return !debug_dir.empty() || !debug_node.empty();
+    }
 };
+
+sharda::DebugArtifactsConfig make_debug_artifacts_config(const Args& args) {
+    sharda::DebugArtifactsConfig config;
+    if (!args.debug) {
+        return config;
+    }
+
+    config.enabled = true;
+    config.output_dir = args.out_prefix + "_debug";
+    return config;
+}
 
 void usage(const char* prog) {
     std::cerr << "Usage: " << prog
@@ -72,6 +94,7 @@ void usage(const char* prog) {
               << "       [-R <targets.bed>] [-j threads] [-f padding]\n"
               << "       [-t <repeats.bed>]\n"
               << "       [-k kmer_size] [-o out_prefix] [-d]\n"
+              << "       [--debug-dir <dir> --debug-node <name> [--debug-stage <stage>]]\n"
               << "\n"
               << "  -r  Reference FASTA (indexed .fai required for -R mode)\n"
               << "  -b  BAM file (name-sorted for single-region mode;\n"
@@ -83,7 +106,100 @@ void usage(const char* prog) {
               << "  -f  Flanking padding in bp (default: 1000, used with -R)\n"
               << "  -k  Kmer size (default: 121)\n"
               << "  -o  Output prefix (default: sharda_out)\n"
-              << "  -d  Debug logging\n";
+              << "  -d  Debug logging\n"
+              << "  --debug-dir    Inspect an existing debug artifact directory\n"
+              << "  --debug-node   Look up a node/segment name in debug GFA output\n"
+              << "  --debug-stage  Restrict lookup to raw, clean, or unitig\n";
+}
+
+std::vector<std::string> split_tab_fields(const std::string& line) {
+    std::vector<std::string> fields;
+    size_t start = 0;
+    while (start <= line.size()) {
+        size_t end = line.find('\t', start);
+        if (end == std::string::npos) {
+            fields.push_back(line.substr(start));
+            break;
+        }
+        fields.push_back(line.substr(start, end - start));
+        start = end + 1;
+    }
+    return fields;
+}
+
+std::string debug_stage_gfa_path(const std::string& debug_dir,
+                                 const std::string& stage_name) {
+    return (fs::path(debug_dir) / (stage_name + ".gfa")).string();
+}
+
+bool find_node_in_gfa(const std::string& gfa_path,
+                      const std::string& node_name,
+                      std::string& sequence,
+                      std::vector<std::string>& tags) {
+    std::ifstream in(gfa_path);
+    if (!in) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] != 'S') {
+            continue;
+        }
+
+        auto fields = split_tab_fields(line);
+        if (fields.size() < 3 || fields[0] != "S") {
+            continue;
+        }
+        if (fields[1] != node_name) {
+            continue;
+        }
+
+        sequence = fields[2];
+        tags.assign(fields.begin() + 3, fields.end());
+        return true;
+    }
+
+    return false;
+}
+
+int run_debug_node_lookup(const Args& args) {
+    if (args.debug_dir.empty() || args.debug_node.empty()) {
+        std::cerr << "Error: --debug-dir and --debug-node must be provided together\n";
+        return 1;
+    }
+
+    std::vector<std::string> stages;
+    if (!args.debug_stage.empty()) {
+        stages.push_back(args.debug_stage);
+    } else {
+        stages = {"raw", "clean", "unitig"};
+    }
+
+    for (const auto& stage_name : stages) {
+        std::string gfa_path = debug_stage_gfa_path(args.debug_dir, stage_name);
+        std::string sequence;
+        std::vector<std::string> tags;
+        if (!find_node_in_gfa(gfa_path, args.debug_node, sequence, tags)) {
+            continue;
+        }
+
+        std::cout << "stage\t" << stage_name << '\n';
+        std::cout << "node\t" << args.debug_node << '\n';
+        std::cout << "sequence\t" << sequence << '\n';
+        for (const auto& tag : tags) {
+            std::cout << "tag\t" << tag << '\n';
+        }
+        return 0;
+    }
+
+    std::cerr << "Error: node " << args.debug_node << " not found in "
+              << args.debug_dir;
+    if (!args.debug_stage.empty()) {
+        std::cerr << " for stage " << args.debug_stage;
+    }
+    std::cerr << '\n';
+    return 1;
 }
 
 Args parse_args(int argc, char* argv[]) {
@@ -99,9 +215,25 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-j" && i + 1 < argc) a.threads = std::stoi(argv[++i]);
         else if (arg == "-f" && i + 1 < argc) a.padding = std::stoi(argv[++i]);
         else if (arg == "-o" && i + 1 < argc) a.out_prefix = argv[++i];
+        else if (arg == "--debug-dir" && i + 1 < argc) a.debug_dir = argv[++i];
+        else if (arg == "--debug-node" && i + 1 < argc) a.debug_node = argv[++i];
+        else if (arg == "--debug-stage" && i + 1 < argc) a.debug_stage = argv[++i];
         else if (arg == "-d") a.debug = true;
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); std::exit(0); }
         else { std::cerr << "Unknown arg: " << arg << '\n'; usage(argv[0]); std::exit(1); }
+    }
+    if (a.has_debug_node_lookup()) {
+        if (a.debug_dir.empty() || a.debug_node.empty()) {
+            std::cerr << "Error: --debug-dir and --debug-node must be used together\n";
+            usage(argv[0]);
+            std::exit(1);
+        }
+        if (!a.debug_stage.empty() && a.debug_stage != "raw"
+            && a.debug_stage != "clean" && a.debug_stage != "unitig") {
+            std::cerr << "Error: --debug-stage must be raw, clean, or unitig\n";
+            std::exit(1);
+        }
+        return a;
     }
     if (a.ref_fasta.empty() || a.bam.empty()) {
         std::cerr << "Error: -r and -b are required\n";
@@ -137,6 +269,7 @@ int run_single_region(const Args& args) {
     // ── 2. Build backbone ───────────────────────────────────────────
     spdlog::info("Building backbone (k={})", args.k);
     sharda::DBG graph(args.k);
+    auto debug_artifacts = make_debug_artifacts_config(args);
     StageTimer backbone_timer("build backbone");
     sharda::build_backbone(graph, ref_seq, trs);
     backbone_timer.finish();
@@ -155,9 +288,14 @@ int run_single_region(const Args& args) {
                  graph.node_count(), graph.edge_count(),
                  graph.haplotype_edges().size());
 
-    std::string raw_gfa = args.out_prefix + ".raw.gfa";
-    sharda::write_gfa(raw_gfa, graph);
-    spdlog::info("Raw graph GFA: {}", raw_gfa);
+    if (debug_artifacts.should_write()) {
+        sharda::write_dbg_debug_artifacts(debug_artifacts, "raw", graph);
+        spdlog::info("Raw graph debug artifacts: {}", debug_artifacts.output_dir);
+    } else {
+        std::string raw_gfa = args.out_prefix + ".raw.gfa";
+        sharda::write_gfa(raw_gfa, graph);
+        spdlog::info("Raw graph GFA: {}", raw_gfa);
+    }
 
     // ── 4. Clean graph ──────────────────────────────────────────────
     spdlog::info("Cleaning graph");
@@ -166,9 +304,14 @@ int run_single_region(const Args& args) {
     sharda::clean_graph(graph, mean_read_len);
     clean_timer.finish();
 
-    std::string clean_gfa = args.out_prefix + ".clean.gfa";
-    sharda::write_gfa(clean_gfa, graph);
-    spdlog::info("Cleaned graph GFA: {}", clean_gfa);
+    if (debug_artifacts.should_write()) {
+        sharda::write_dbg_debug_artifacts(debug_artifacts, "clean", graph);
+        spdlog::info("Cleaned graph debug artifacts: {}", debug_artifacts.output_dir);
+    } else {
+        std::string clean_gfa = args.out_prefix + ".clean.gfa";
+        sharda::write_gfa(clean_gfa, graph);
+        spdlog::info("Cleaned graph GFA: {}", clean_gfa);
+    }
 
     // ── 5. Build unitig graph ───────────────────────────────────────
     spdlog::info("Building unitig graph");
@@ -180,9 +323,14 @@ int run_single_region(const Args& args) {
     }
     unitig_timer.finish();
 
-    std::string unitig_gfa = args.out_prefix + ".unitig.gfa";
-    sharda::write_unitig_gfa(unitig_gfa, ug);
-    spdlog::info("Unitig graph GFA: {}", unitig_gfa);
+    if (debug_artifacts.should_write()) {
+        sharda::write_unitig_debug_artifacts(debug_artifacts, "unitig", ug);
+        spdlog::info("Unitig graph debug artifacts: {}", debug_artifacts.output_dir);
+    } else {
+        std::string unitig_gfa = args.out_prefix + ".unitig.gfa";
+        sharda::write_unitig_gfa(unitig_gfa, ug);
+        spdlog::info("Unitig graph GFA: {}", unitig_gfa);
+    }
 
     // ── 6. Flow decomposition ───────────────────────────────────────
     spdlog::info("Running flow decomposition (ploidy={})", args.ploidy);
@@ -292,11 +440,13 @@ int run_whole_genome(const Args& args) {
                 params.ploidy       = args.ploidy;
                 params.k            = args.k;
                 params.debug        = args.debug;
+                params.debug_artifacts = make_debug_artifacts_config(args);
 
                 if (args.debug) {
                     std::string safe_name = region_name;
                     std::replace(safe_name.begin(), safe_name.end(), ':', '_');
                     params.debug_dir = (debug_base / safe_name).string();
+                    params.debug_artifacts.output_dir = params.debug_dir;
                 }
 
                 // Assemble
@@ -377,6 +527,9 @@ int run_whole_genome(const Args& args) {
 
 int main(int argc, char* argv[]) {
     auto args = parse_args(argc, argv);
+    if (args.has_debug_node_lookup()) {
+        return run_debug_node_lookup(args);
+    }
     sharda::init_logging(args.debug);
 
     try {
