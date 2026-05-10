@@ -5,7 +5,9 @@
 Sharda is a targeted haplotype assembler for short-read sequencing data. Given
 aligned reads, a reference sequence, and tandem repeat annotations, it
 reconstructs phased haplotype sequences using a positional de Bruijn graph and
-ILP-based flow decomposition.
+ILP-based flow decomposition. It can also run in an SV-oriented mode that
+calls simple indels directly from the unitig graph without running haplotype
+decomposition.
 
 The tandem repeat BED is optional. When omitted, Sharda runs the same assembly
 pipeline without tandem repeat-aware anchor chaining.
@@ -20,6 +22,9 @@ pipeline without tandem repeat-aware anchor chaining.
   graph for phase-aware path extraction.
 - **ILP flow decomposition** — decomposes unitig graph coverage into haplotype
   paths with phasing constraints via the HiGHS solver.
+- **SV-only mode** — skips haplotype flow decomposition and calls simple
+  insertions and deletions from alternate unitig traversals against the
+  backbone path.
 - **Whole-genome parallel mode** — processes many target regions concurrently
   from a coordinate-sorted BAM.
 
@@ -174,6 +179,49 @@ This requires:
 - An indexed reference FASTA (`.fai` file alongside `reference.fa`)
 - A coordinate-sorted BAM with an index (`.bai` file)
 
+### SV-only mode
+
+Call structural variants from the unitig graph without producing haplotype
+FASTA output:
+
+```bash
+./build/sharda \
+  --sv-only \
+  -r region_ref.fa \
+  -b reads.namesorted.bam \
+  -k 45 \
+  -o output_prefix
+```
+
+Whole-genome SV-only mode uses the same flag with `-R`:
+
+```bash
+./build/sharda \
+  --sv-only \
+  -r reference.fa \
+  -b reads.sorted.bam \
+  -R target_regions.bed \
+  -j 8 \
+  -o output_prefix
+```
+
+Current SV mode behavior:
+
+- Preserves backbone-backbone edges during graph cleaning.
+- Still emits the standard single-region graph views (`raw.gfa`, `clean.gfa`,
+  `unitig.gfa`) in non-debug single-region runs.
+- Adds SV-oriented unitig views as `unitig.sv.gfa` and `unitig.sv.json`.
+- Writes `<prefix>.sv.vcf` with `SVTYPE`, `END`, `SVLEN`, `SUPPORT`,
+  `SRC_UID`, `SNK_UID`, `SRC_REF_POS`, and `SNK_REF_POS`.
+- Calls sequence-resolved simple insertions and deletions only.
+
+Important distinction:
+
+- `--sv-only` disables haplotype flow decomposition and emits SV outputs.
+- `--unitig-only` stops before both haplotype decomposition and SV calling.
+  If `--unitig-only` is present, `<prefix>.sv.vcf` is not written even if
+  `--sv-only` is also supplied.
+
 ### Options
 
 | Flag | Description | Default |
@@ -188,6 +236,7 @@ This requires:
 | `-k` | k-mer size | 121 |
 | `-o` | Output prefix | `sharda_out` |
 | `--unitig-only` | Stop after unitig graph construction; skip ILP and haplotype FASTA output | off |
+| `--sv-only` | Skip haplotype decomposition and emit SV outputs only | off |
 | `-d` | Enable debug logging and GFA output | off |
 | `--trace-read` | Persist a trace for a specific read name in debug mode | repeatable |
 | `--trace-locus` | Persist a trace for a local reference interval in debug mode | repeatable |
@@ -200,9 +249,15 @@ This requires:
 - `<prefix>.haplotypes.fa` — assembled haplotype sequences.
   In whole-genome mode, contig names embed region coordinates
   (e.g., `chr1:10000-20000_hap1_flow30`).
+- `<prefix>.sv.vcf` — SV-mode output containing the current simple indel calls.
+  Written when SV mode is active and `--unitig-only` is not set.
+- In single-region non-debug runs: `<prefix>.raw.gfa`, `<prefix>.clean.gfa`,
+  and `<prefix>.unitig.gfa`.
+- In SV mode: `<prefix>.unitig.sv.gfa` and `<prefix>.unitig.sv.json`.
 - With `-d`: a debug artifact directory named `<prefix>_debug/`.
   In single-region mode it contains `raw.gfa`, `clean.gfa`, `unitig.gfa`,
-  `raw.json`, `clean.json`, `unitig.json`, `manifest.json`, `viewer.html`,
+  `unitig.sv.gfa` and `unitig.sv.json` when SV mode is active, `raw.json`,
+  `clean.json`, `unitig.json`, `manifest.json`, `viewer.html`,
   `flow_paths.json` after ILP path extraction, and optionally
   `read_traces.json` and `locus_traces.json` when `--trace-read` or
   `--trace-locus` are used. `unitig.gfa` segment lines carry aggregated

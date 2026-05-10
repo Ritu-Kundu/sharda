@@ -1,7 +1,9 @@
 # Method
 
 This document describes the algorithmic method used by Sharda to produce phased
-haplotype sequences from aligned short reads.
+haplotype sequences from aligned short reads. The same backbone/DBG/unitig
+pipeline also supports an SV-oriented execution mode that calls simple indels
+from the unitig graph instead of running haplotype flow decomposition.
 
 The tandem repeat BED is optional. When no TR annotations are supplied, the
 pipeline still runs, but all reads are effectively treated as ORR reads and the
@@ -9,7 +11,19 @@ IRR anchor-chaining path is never activated.
 
 ## Overview
 
-Sharda follows a six-stage pipeline for each target region:
+Sharda currently has three execution modes over the same graph-construction
+pipeline:
+
+- **Default haplotype mode** — build the graph, compact to unitigs, run ILP
+  flow decomposition, and emit haplotype FASTA.
+- **SV-only mode** (`--sv-only`) — build the graph, compact to unitigs, call
+  simple indels from the unitig graph, and emit `<prefix>.sv.vcf` plus the
+  usual graph artifacts.
+- **Unitig-only mode** (`--unitig-only`) — stop after unitig graph
+  construction and artifact emission. This mode skips both haplotype flow
+  decomposition and SV calling.
+
+Sharda follows this pipeline for each target region:
 
 1. **Backbone construction** — build a linear chain of positional de Bruijn
    graph nodes from the reference sequence.
@@ -17,9 +31,11 @@ Sharda follows a six-stage pipeline for each target region:
    positional (ORR) and anchor-chained (IRR) strategies.
 3. **Graph cleaning** — iteratively remove under-supported tips and low-weight edges; bubble popping is currently disabled.
 4. **Unitig compaction** — collapse maximal non-branching paths into unitigs.
-5. **Flow decomposition** — solve an ILP to decompose unitig coverage into
-   haplotype paths subject to phasing constraints.
-6. **Output** — emit haplotype FASTA sequences (and optional GFA debug graphs).
+5. **SV calling and/or flow decomposition** — depending on the execution mode,
+   call simple indels from alternate unitig traversals and/or solve an ILP to
+   decompose unitig coverage into haplotype paths.
+6. **Output** — emit the outputs selected by the mode: haplotype FASTA,
+   `<prefix>.sv.vcf`, graph artifacts, or only unitig/debug artifacts.
 
 ---
 
@@ -162,7 +178,7 @@ conditions hold:
 That threshold is:
 
 $$
-\max\left(0.05 \cdot \text{local\_avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
+\max\left(0.05 \cdot \text{local avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
 $$
 
 where `local_avg` is the mean edge weight in a local ±500 bp window around the
@@ -179,14 +195,14 @@ coordinate in `ref_positions`.
 Backbone-to-backbone edges are removed when:
 
 $$
-	ext{edge weight} < 0.05 \cdot \text{local\_avg}
+   ext{edge weight} < 0.05 \cdot \text{local avg}
 $$
 
 Edges that involve at least one non-backbone node use the same regional floor
 as tip pruning and are removed when:
 
 $$
-	ext{edge weight} < \max\left(0.05 \cdot \text{local\_avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
+   ext{edge weight} < \max\left(0.05 \cdot \text{local avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
 $$
 
 This keeps pruning aggressive on weak read-derived branches without severing
@@ -234,7 +250,79 @@ A DFS-based cycle detection check is run on the unitig graph. Cycles indicate
 unresolvable repeat structures; if detected, the assembly aborts for that
 region.
 
-## 7. Flow decomposition
+## 7. SV calling mode
+
+SV mode reuses the cleaned unitig DAG instead of the ILP path model.
+
+### Activation and outputs
+
+`--sv-only` activates SV-only execution. In this mode, Sharda:
+
+- preserves backbone-backbone edges during graph cleaning
+- still emits the standard single-region graph views
+- emits SV-oriented unitig views as `unitig.sv.gfa` and `unitig.sv.json`
+- writes `<prefix>.sv.vcf`
+- skips haplotype flow decomposition and does not write `<prefix>.haplotypes.fa`
+
+If `--unitig-only` is also present, Sharda stops after unitig graph
+construction and does not call SVs.
+
+### Calling heuristic
+
+The current SV caller is intentionally conservative and limited to simple
+insertions and deletions.
+
+For each backbone-only unitig with out-degree greater than one, the caller:
+
+1. explores non-backbone alternate traversals leaving that source
+2. stops each traversal at the first downstream backbone unitig where the path
+   rejoins the backbone
+3. enumerates all source-to-sink paths within that minimal canonical interval
+4. requires exactly one all-backbone path in the interval to serve as the
+   reference path
+5. reconstructs reference and alternate sequences from unitig sequences using
+   the stored `k-1` overlap between adjacent unitigs
+6. trims shared prefix and suffix sequence
+7. emits a call only if the remaining difference reduces to a simple insertion
+   or deletion
+
+### Current call ranking and collapse rules
+
+Each emitted call carries a `SUPPORT` score, currently defined as the minimum
+`mean_depth` across the non-backbone unitigs on the representative alternate
+traversal.
+
+After candidate generation, the caller applies two collapse passes:
+
+1. exact normalized-call collapse:
+   calls with identical `chrom`, normalized `POS`, `END`, `REF`, `ALT`,
+   `SVTYPE`, and `SVLEN` are merged, keeping the best-supported representative
+2. narrow overlapping-deletion collapse:
+   overlapping canonical deletions are merged only when they share chromosome,
+   `SVLEN`, retained anchor base in `ALT`, and either `SRC_REF_POS` or
+   `SNK_REF_POS`
+
+This is why the VCF can contain fewer records than the number of raw alternate
+traversals in the unitig graph.
+
+### VCF fields
+
+`<prefix>.sv.vcf` currently contains these key INFO fields:
+
+- `SVTYPE` — current structural-variant type (`INS` or `DEL`)
+- `END` — 1-based inclusive end position of the normalized reference allele
+- `SVLEN` — `ALT` length minus `REF` length
+- `SUPPORT` — representative-path support score
+- `SRC_UID` and `SNK_UID` — source and sink backbone unitig IDs for the
+  canonical interval
+- `SRC_REF_POS` and `SNK_REF_POS` — 1-based reference anchor coordinates for
+  that canonical interval
+
+The normalized VCF allele can be smaller than the full canonical interval used
+to derive it. The source/sink INFO fields therefore provide additional context
+about where the alternate traversal departed from and rejoined the backbone.
+
+## 8. Flow decomposition
 
 The goal is to decompose the unitig-level graph into *ploidy* haplotype paths
 whose combined flow best explains the observed edge coverage, subject to
