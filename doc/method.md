@@ -15,7 +15,7 @@ Sharda follows a six-stage pipeline for each target region:
    graph nodes from the reference sequence.
 2. **Read addition** — thread aligned reads through the graph, choosing between
    positional (ORR) and anchor-chained (IRR) strategies.
-3. **Graph cleaning** — iteratively remove tips, low-weight edges, and bubbles.
+3. **Graph cleaning** — iteratively remove under-supported tips and low-weight edges; bubble popping is currently disabled.
 4. **Unitig compaction** — collapse maximal non-branching paths into unitigs.
 5. **Flow decomposition** — solve an ILP to decompose unitig coverage into
    haplotype paths subject to phasing constraints.
@@ -29,8 +29,10 @@ A standard de Bruijn graph maps each k-mer to a single node, which is
 problematic in tandem repeat regions where the same k-mer appears at multiple
 genomic positions. Sharda's graph is *positional*: backbone nodes are keyed by
 their reference coordinate, while non-backbone (read-derived) nodes are keyed
-by k-mer string. This preserves the linear order of the reference and provides
-unique anchor points inside repetitive regions.
+by k-mer string and can accumulate multiple implied coordinates in a coordinate
+set. This preserves the linear order of the reference while still allowing one
+read-derived node to represent the same novel k-mer reused at multiple nearby
+placements.
 
 Each node stores:
 
@@ -38,7 +40,8 @@ Each node stores:
 | ----- | ------- |
 | `id` | Unique 64-bit identifier |
 | `kmer` | The k-mer string (length *k*) |
-| `ref_pos` | Genomic position if backbone; −1 otherwise |
+| `ref_pos` | Primary local coordinate; exact for backbone, minimum implied coordinate for non-backbone nodes |
+| `ref_positions` | All stored local coordinates associated with the node |
 | `is_backbone` | Whether the node was derived from the reference |
 | `depth` | Number of reads covering this node |
 
@@ -87,24 +90,32 @@ reads remain ORR.
 
 ## 4. Read addition
 
-### ORR path (alignment-guided)
+### ORR path (implied-coordinate placement)
 
-For each match/mismatch operation in the CIGAR string, the corresponding
-reference position is used to look up the backbone node. If the position maps
-to a backbone node and the k-mer matches, the read walks along the backbone.
-If there is a mismatch, a new read node is created.
+For an ORR read starting at local coordinate $N$, the first read k-mer is given
+implied coordinate $N$ and each subsequent read k-mer gets implied coordinate
+$N + i$.
 
-Insert operations (`I`) create read nodes linked into the path. Delete
-operations (`D`) skip reference positions, advancing along the backbone without
-creating nodes.
+At each read k-mer position:
 
-This produces a path of node IDs through the graph that faithfully follows the
-alignment.
+1. Search backbone nodes carrying the same k-mer.
+2. If one or more backbone nodes match, reuse the backbone occurrence whose
+   coordinate is closest to the implied coordinate.
+3. If no backbone node matches, reuse or create a non-backbone read node keyed
+   by k-mer string and record the implied coordinate in that node's
+   `ref_positions` set.
+4. Add an edge from the previous chosen node. If the first read k-mer is novel
+   and $N > 0$, also add the requested branch edge from backbone coordinate
+   $N - 1$ into that first novel node.
+
+This produces a path that follows the alignment start coordinate, but it is not
+restricted to exact positional backbone matches when a repeated backbone k-mer
+has a closer occurrence elsewhere.
 
 ### IRR path (anchor chaining)
 
-For reads that overlap a tandem repeat, the ORR walk would place repeated
-k-mers at the wrong backbone positions. Instead:
+For reads that overlap a tandem repeat, exact ORR-style implied placement can
+still be ambiguous. Instead:
 
 1. **Extract k-mers** from the read sequence.
 2. **Find anchors** — k-mers that appear *exactly once* among the backbone
@@ -121,7 +132,7 @@ k-mers at the wrong backbone positions. Instead:
 4. **Walk the read**: at each k-mer position, if an anchor is available, use
    the backbone node; otherwise, create a hash-based read node. This interleaves
    positional and standard DBG strategies.
-5. **Fallback**: if no anchors are found, fall back to the ORR path.
+5. **Fallback**: if no anchors are found, fall back to the ORR implied-coordinate path.
 
 ### Haplotype edges
 
@@ -134,36 +145,75 @@ enforce phasing.
 
 ## 5. Graph cleaning
 
-Graph cleaning removes noise and errors via three iterative operations (up to
-10 rounds, stopping when no changes are made):
+Graph cleaning removes noise and errors iteratively (up to 10 rounds, stopping
+when no changes are made). The current implementation performs tip removal and
+low-weight edge pruning each round, and explicitly skips bubble popping.
 
 ### Tip removal
 
 A **tip** is a dead-end path (in-degree = 0 or out-degree = 0 at one end)
 shorter than the mean read length. Tips are traced by following single-degree
-nodes until a branch point is reached. If the traced path is short, all
-non-backbone nodes on it are removed.
+nodes until a branch point is reached. A traced tip is removed only when both
+conditions hold:
+
+- the traced chain is shorter than the mean read length
+- its mean edge support is below a coverage-aware threshold
+
+That threshold is:
+
+$$
+\max\left(0.05 \cdot \text{local\_avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
+$$
+
+where `local_avg` is the mean edge weight in a local ±500 bp window around the
+tip's stored coordinates. Haplotype edges do not protect a tip from removal;
+they are ignored during tip tracing and only affect downstream phasing.
 
 ### Low-weight edge pruning
 
 For each edge, the local average weight is computed over edges within a ±500 bp
-window around the source node's reference position. Edges with weight below 5%
-of the local average are removed.
+window around the stored coordinates of both endpoint nodes. Backbone nodes
+contribute their exact `ref_pos`; non-backbone nodes contribute every implied
+coordinate in `ref_positions`.
+
+Backbone-to-backbone edges are removed when:
+
+$$
+	ext{edge weight} < 0.05 \cdot \text{local\_avg}
+$$
+
+Edges that involve at least one non-backbone node use the same regional floor
+as tip pruning and are removed when:
+
+$$
+	ext{edge weight} < \max\left(0.05 \cdot \text{local\_avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
+$$
+
+This keeps pruning aggressive on weak read-derived branches without severing
+weak-but-legitimate backbone continuity edges.
 
 ### Bubble popping
 
-A **bubble** is detected when a node has exactly two outgoing edges whose
-forward linear traces reconverge at the same node (or share a common successor)
-within 2*k* steps. If one branch has weight below 20% of the other, the weaker
-branch's non-backbone nodes are removed.
+Bubble popping is currently disabled. The code still reports this in the
+cleaning summary so debug logs make it explicit that no bubble-removal pass ran.
 
 After each operation, the graph's adjacency lists are rebuilt to reflect
 removals.
 
 ## 6. Unitig compaction
 
-Maximal non-branching paths (chains of nodes with in-degree 1 and out-degree 1)
-are collapsed into **unitigs**. Each unitig stores:
+Maximal non-branching paths are collapsed into **unitigs**. In practice,
+compaction starts from non-internal endpoints, extends across unique
+`1-in/1-out` continuations, and then merges provisional fragments when the
+cleaned DBG still implies a unique continuation across their boundary. This
+keeps compaction driven by graph topology rather than node insertion order.
+
+Singleton unitigs whose sequence length is exactly $k$ are dropped when they
+have no ordinary incoming or outgoing unitig edges. Haplotype-edge-only
+connectivity does not keep such a singleton in `unitig.gfa`, because haplotype
+edges are phasing constraints rather than traversal edges.
+
+Each retained unitig stores:
 
 - The list of underlying node IDs.
 - A consensus sequence (first node's k-mer plus the last character of each
@@ -175,7 +225,8 @@ node of one unitig to the first node of another. Edge weights are summed.
 
 Haplotype edges are lifted from node level to unitig level. Weak haplotype
 edges (weight < 5% of the minimum depth of the two connected unitigs) are
-pruned.
+pruned, but these phasing edges are not represented as `L` lines in
+`unitig.gfa`.
 
 A DFS-based cycle detection check is run on the unitig graph. Cycles indicate
 unresolvable repeat structures; if detected, the assembly aborts for that

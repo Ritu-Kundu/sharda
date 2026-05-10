@@ -36,8 +36,15 @@ public:
     /// Lookup backbone node by ref_pos.  Returns UINT64_MAX if not found.
     uint64_t backbone_node_at(int32_t ref_pos) const;
 
+    /// Lookup the backbone node with this k-mer nearest to an implied coordinate.
+    uint64_t closest_backbone_node_for_kmer(const std::string& kmer,
+                                           int32_t implied_ref_pos) const;
+
     /// Lookup non-backbone node by kmer. Returns UINT64_MAX if not found.
     uint64_t find_read_node(const std::string& kmer) const;
+
+    /// Record an implied coordinate on an existing node.
+    void add_node_ref_pos(uint64_t node_id, int32_t ref_pos);
 
     // ── Edge operations ─────────────────────────────────────────────────
     /// Add or increment a directed edge.
@@ -81,6 +88,7 @@ private:
     // Lookup maps
     std::unordered_map<int32_t, uint64_t>     pos_to_node_;   // ref_pos → node_id
     std::unordered_map<std::string, uint64_t>  kmer_to_node_;  // kmer → node_id (non-backbone)
+    std::unordered_map<std::string, std::vector<uint64_t>> backbone_kmer_to_nodes_;
     std::unordered_map<int, std::vector<uint64_t>> tr_to_nodes_; // tr_id → backbone node ids
 
     // edge lookup: (from,to) → edge index

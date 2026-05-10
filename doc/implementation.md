@@ -46,13 +46,17 @@ AlignedRead      { name, seq, qual, ref_start, ref_end, cigar, flag }
 ReadPair         { read1, read2 }
 ReadType         enum: ORR, IRR
 ReadClassification { type, is_evidence, tr_id }
-Node             { id, kmer, ref_pos, is_backbone, depth }
+Node             { id, kmer, ref_pos, ref_positions, is_backbone, depth }
 Edge             { from, to, weight }
 HaplotypeEdge    { from_node, to_node, weight }
 Unitig           { id, node_ids, sequence, mean_depth }
 HaplotypePath    { unitig_ids, sequence, flow }
-AlignedBase      { read_pos, ref_pos, is_insert }
 ```
+
+`ref_pos` remains the primary scalar coordinate used by existing consumers.
+For backbone nodes it is the exact backbone position. For non-backbone nodes it
+is the minimum element of `ref_positions`, which stores every implied local
+coordinate that has reused that read node.
 
 ### `src/graph/dbg.h / dbg.cpp` — Positional de Bruijn graph
 
@@ -63,6 +67,8 @@ The `DBG` class stores:
 - `fwd_adj_` / `rev_adj_` — per-node adjacency lists (edge indices).
 - `pos_to_node_` — map from `ref_pos` to node ID (backbone lookup).
 - `kmer_to_node_` — map from k-mer string to node ID (read-node lookup).
+- `backbone_kmer_to_nodes_` — map from backbone k-mer string to all backbone
+  node IDs carrying that k-mer, used for nearest-position reuse.
 - `tr_to_nodes_` — map from TR ID to the set of backbone node IDs inside that TR.
 - `node_removed_` / `edge_removed_` — soft-delete flags.
 
@@ -72,13 +78,14 @@ Key operations:
 | ------ | ----------- |
 | `add_backbone_node(kmer, ref_pos)` | Positional node, indexed by `ref_pos` |
 | `add_read_node(kmer)` | Hash-based node, indexed by `kmer` string |
+| `closest_backbone_node_for_kmer(kmer, implied_ref_pos)` | Returns the backbone occurrence of `kmer` nearest to the implied coordinate |
+| `add_node_ref_pos(node_id, ref_pos)` | Records an implied coordinate on a reused node |
 | `add_edge(from, to)` | Increments weight if edge exists, else creates |
 | `add_haplotype_edge(from, to)` | Increments weight if exists |
-| `register_tr_node(tr_id, node_id)` | Associates a backbone node with a TR |
 | `remove_node(id)` / `remove_edge(idx)` | Soft-delete |
 | `rebuild_adjacency()` | Reconstructs adjacency from non-removed edges |
-| `node_by_pos(ref_pos)` | O(1) backbone node lookup by position |
-| `node_by_kmer(kmer)` | O(1) read-node lookup by k-mer |
+| `backbone_node_at(ref_pos)` | O(1) backbone node lookup by exact position |
+| `find_read_node(kmer)` | O(1) read-node lookup by k-mer |
 
 ### `src/graph/backbone.h / backbone.cpp` — Backbone builder
 
@@ -94,11 +101,17 @@ Key operations:
 `UnitigGraph::build(const DBG& source)`:
 
 1. Identifies non-internal nodes (in-degree ≠ 1 or out-degree ≠ 1).
-2. Traces forward from each non-internal node along linear chains.
+2. Traces backward and forward from each non-internal node along unique linear
+  continuations so compaction is not sensitive to node ID order.
 3. Handles isolated all-internal chains as a second pass.
-4. Builds unitig-level edges and haplotype edges by mapping node-level
+4. Merges provisional unitigs when the source DBG still implies a unique
+  predecessor/successor continuation across the unitig boundary.
+5. Builds unitig-level edges and haplotype edges by mapping node-level
    connections through the `node_to_unitig_` map.
-5. Prunes weak haplotype edges (< 5% of min endpoint coverage).
+6. Prunes weak haplotype edges (< 5% of min endpoint coverage).
+7. Drops singleton unitigs with no ordinary unitig-edge incidence. Haplotype
+  edges alone do not keep a singleton because they are not emitted in
+  `unitig.gfa`.
 
 `UnitigGraph::detect_cycles()` runs iterative DFS with three-colour marking
 (white/gray/black).
@@ -160,6 +173,9 @@ Thin orchestration layer for persisted debug outputs.
 - `write_unitig_json(path, unitig_graph)` — structured JSON snapshot from a
   `UnitigGraph`.
 
+For DBG artifacts, serializer-visible node IDs are emitted in a stable order so
+repeated runs on the same input produce deterministic GFA and JSON node names.
+
 ### `src/assembly/read_classifier.h / read_classifier.cpp`
 
 `classify_read(read, trs)` → `ReadClassification`:
@@ -186,26 +202,26 @@ Thin orchestration layer for persisted debug outputs.
 `add_read_pair(pair, graph, trs)`:
 
 1. Classifies both reads.
-2. Calls `cigar_walk()` to produce `AlignedBase` lists (maps read positions to
-   reference positions, marking inserts).
-3. Dispatches to `add_orr_path()` or `add_irr_path()` per read.
-4. If either read is evidence: adds a haplotype edge between the pair's
+2. Dispatches to `add_orr_path()` or `add_irr_path()` per read.
+3. If either read is evidence: adds a haplotype edge between the pair's
    paths (last node of left read → first node of right read, ordered by
    `ref_start`).
 
 Internal helpers:
 
-- **`cigar_walk(read)`** — walks the CIGAR, emitting one `AlignedBase` per
-  consumed read base. Matches emit `{read_pos, ref_pos}`, inserts emit
-  `{read_pos, ref_pos, is_insert=true}`, deletes advance `ref_pos` only.
+- **`add_orr_path(read, graph)`** — derives an implied local coordinate for the
+  read's first k-mer from `read.ref_start`, increments one coordinate per k-mer,
+  and for each read k-mer first searches all backbone nodes carrying that k-mer.
+  If multiple backbone nodes match, it reuses the one closest to the implied
+  coordinate. If none match, it reuses or creates a read node keyed by k-mer
+  sequence, records the implied coordinate in that node's `ref_positions`, and
+  links the first divergent k-mer from backbone coordinate `N-1` when `N > 0`.
 
-- **`add_orr_path(read, graph, aligned_bases)`** — for each aligned base, if
-  `!is_insert` and a backbone node exists at `ref_pos`, uses it; otherwise
-  creates a read node. Produces a path, incrementing depths and edge weights.
-
-- **`add_irr_path(read, tr_id, graph, aligned_bases)`** — extracts read k-mers,
-  calls `find_and_chain_anchors`, then walks k-mer positions using anchored
-  backbone nodes or hash-based read nodes. Falls back to ORR if no anchors.
+- **`add_irr_path(read, tr_id, graph)`** — extracts read k-mers, calls
+  `find_and_chain_anchors`, then walks k-mer positions using anchored backbone
+  nodes or hash-based read nodes. IRR anchor chaining remains the preferred
+  placement path. If no anchors are found, IRR falls back to the ORR implied-
+  coordinate path.
 
 ### `src/assembly/graph_cleaner.h / graph_cleaner.cpp`
 
@@ -214,16 +230,21 @@ Internal helpers:
 Runs up to 10 rounds of:
 
 1. `remove_tips(graph, max_tip_len)` — traces dead-end paths (in-degree or
-   out-degree = 0) by following single-degree nodes. Removes paths shorter than
-   `max_tip_len` (set to `mean_read_length`, default 150).
+  out-degree = 0) by following single-degree nodes. Removes a traced tip only
+  if it is shorter than `max_tip_len` and its mean tip-edge support is below
+  `max(0.05 * local_avg, 0.25 * mean_backbone_depth(graph))`. Haplotype edges
+  are ignored for this decision and do not protect tips from removal.
 
 2. `prune_low_weight_edges(graph)` — for each edge, computes the mean weight of
-   all edges within ±500 bp of the source node's reference position. Removes
-   edges with weight < 5% of that local average.
+  all edges within ±500 bp of the edge's endpoint coordinates. A node is
+  considered local to the window if its `ref_pos` or any entry in its
+  `ref_positions` falls in range. Backbone-backbone edges are removed when
+  `weight < 0.05 * local_avg`. Edges touching at least one non-backbone node
+  instead use `weight < max(0.05 * local_avg, 0.25 * mean_backbone_depth(graph))`.
 
-3. `pop_bubbles(graph)` — from each node with out-degree = 2, traces both
-   branches forward (up to 2k steps). If they reconverge and one branch has
-   weight < 20% of the other, removes the weaker branch's non-backbone nodes.
+3. Bubble popping is currently skipped. The cleaner logs
+  `bubble_popping_skipped=true` in each iteration summary and does not call the
+  older bubble-removal heuristic.
 
 After each operation, `graph.rebuild_adjacency()` is called. The loop exits
 early if a round produces no changes.

@@ -16,6 +16,7 @@ struct ReadTraceNode {
     bool        removed_after_clean = false;
     uint64_t    unitig_id = UINT64_MAX;
     std::string unitig_sequence;
+    std::vector<int32_t> ref_positions;
 };
 
 struct ReadTraceRecord {

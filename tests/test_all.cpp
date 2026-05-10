@@ -57,6 +57,31 @@ protected:
     }
 };
 
+namespace {
+
+void add_edge_copies(sharda::DBG& graph, uint64_t from, uint64_t to, uint32_t copies) {
+    for (uint32_t i = 0; i < copies; ++i) {
+        graph.add_edge(from, to);
+    }
+}
+
+bool has_edge(const sharda::DBG& graph, uint64_t from, uint64_t to) {
+    for (uint64_t edge_index : graph.out_edges(from)) {
+        if (graph.edges()[edge_index].to == to) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string read_text_file(const std::string& path) {
+    std::ifstream in(path);
+    return std::string((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+}
+
+} // namespace
+
 TEST_F(TempFileTest, FastaRoundTrip) {
     std::string path = tmp_path("test.fa");
     {
@@ -171,6 +196,326 @@ TEST(DBG, HaplotypeEdges) {
     EXPECT_EQ(graph.haplotype_edges()[0].to_node, b);
 }
 
+TEST(GraphCleaner, RemovesUnderSupportedTipEvenWithHaplotypeEdges) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    auto b2 = graph.backbone_node_at(2);
+    auto b3 = graph.backbone_node_at(3);
+    auto b4 = graph.backbone_node_at(4);
+    auto b5 = graph.backbone_node_at(5);
+    ASSERT_NE(b2, UINT64_MAX);
+    ASSERT_NE(b3, UINT64_MAX);
+    ASSERT_NE(b4, UINT64_MAX);
+    ASSERT_NE(b5, UINT64_MAX);
+
+    add_edge_copies(graph, b2, b3, 99);
+    add_edge_copies(graph, b3, b4, 99);
+    add_edge_copies(graph, b4, b5, 99);
+
+    auto t1 = graph.add_read_node("TTT");
+    auto t2 = graph.add_read_node("TTA");
+    graph.add_node_ref_pos(t1, 2);
+    graph.add_node_ref_pos(t2, 3);
+    graph.add_edge(t1, t2);
+    graph.add_edge(t2, b4);
+    graph.add_haplotype_edge(t1, t2);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_TRUE(graph.is_node_removed(t1));
+    EXPECT_TRUE(graph.is_node_removed(t2));
+    EXPECT_TRUE(graph.haplotype_edges().empty());
+}
+
+TEST(GraphCleaner, KeepsSupportedShortTip) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    auto b2 = graph.backbone_node_at(2);
+    auto b3 = graph.backbone_node_at(3);
+    auto b4 = graph.backbone_node_at(4);
+    auto b5 = graph.backbone_node_at(5);
+    ASSERT_NE(b2, UINT64_MAX);
+    ASSERT_NE(b3, UINT64_MAX);
+    ASSERT_NE(b4, UINT64_MAX);
+    ASSERT_NE(b5, UINT64_MAX);
+
+    add_edge_copies(graph, b2, b3, 99);
+    add_edge_copies(graph, b3, b4, 99);
+    add_edge_copies(graph, b4, b5, 99);
+
+    auto t1 = graph.add_read_node("GGG");
+    auto t2 = graph.add_read_node("GGA");
+    graph.add_node_ref_pos(t1, 2);
+    graph.add_node_ref_pos(t2, 3);
+    add_edge_copies(graph, t1, t2, 10);
+    add_edge_copies(graph, t2, b4, 10);
+    graph.add_haplotype_edge(t1, t2);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_FALSE(graph.is_node_removed(t1));
+    EXPECT_FALSE(graph.is_node_removed(t2));
+    EXPECT_TRUE(has_edge(graph, t1, t2));
+    EXPECT_TRUE(has_edge(graph, t2, b4));
+}
+
+TEST(GraphCleaner, PrunesLowWeightNonBackboneEdgesUsingImpliedCoordinates) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    auto b0 = graph.backbone_node_at(0);
+    auto b1 = graph.backbone_node_at(1);
+    auto b2 = graph.backbone_node_at(2);
+    auto b3 = graph.backbone_node_at(3);
+    ASSERT_NE(b0, UINT64_MAX);
+    ASSERT_NE(b1, UINT64_MAX);
+    ASSERT_NE(b2, UINT64_MAX);
+    ASSERT_NE(b3, UINT64_MAX);
+
+    add_edge_copies(graph, b0, b1, 99);
+    add_edge_copies(graph, b1, b2, 99);
+    add_edge_copies(graph, b2, b3, 99);
+
+    auto r1 = graph.add_read_node("TTT");
+    auto r2 = graph.add_read_node("TTC");
+    graph.add_node_ref_pos(r1, 1);
+    graph.add_node_ref_pos(r2, 2);
+
+    add_edge_copies(graph, b0, r1, 10);
+    graph.add_edge(r1, r2);
+    add_edge_copies(graph, r2, b3, 10);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_FALSE(has_edge(graph, r1, r2));
+    EXPECT_TRUE(has_edge(graph, b0, r1));
+    EXPECT_TRUE(has_edge(graph, r2, b3));
+}
+
+TEST(GraphCleaner, DoesNotPopBubblesDuringCleaning) {
+    sharda::DBG graph(3);
+    auto source = graph.add_backbone_node("AAA", 0, -1);
+    auto sink = graph.add_backbone_node("CCC", 3, -1);
+    auto strong = graph.add_read_node("AAT");
+    auto weak = graph.add_read_node("AAC");
+
+    graph.add_node_ref_pos(strong, 1);
+    graph.add_node_ref_pos(weak, 1);
+
+    add_edge_copies(graph, source, strong, 19);
+    add_edge_copies(graph, strong, sink, 19);
+    add_edge_copies(graph, source, weak, 3);
+    add_edge_copies(graph, weak, sink, 3);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_FALSE(graph.is_node_removed(strong));
+    EXPECT_FALSE(graph.is_node_removed(weak));
+    EXPECT_TRUE(has_edge(graph, source, weak));
+    EXPECT_TRUE(has_edge(graph, weak, sink));
+}
+
+TEST(GraphCleaner, RemovesTipUsingRegionalMeanDepthFloor) {
+    sharda::DBG graph(3);
+    auto b0 = graph.add_backbone_node("AAA", 0, -1);
+    auto b1 = graph.add_backbone_node("AAT", 1, -1);
+    auto b2 = graph.add_backbone_node("ATC", 2, -1);
+    graph.node_mut(b0).depth = 8;
+    graph.node_mut(b1).depth = 8;
+    graph.node_mut(b2).depth = 8;
+
+    add_edge_copies(graph, b0, b1, 4);
+    add_edge_copies(graph, b1, b2, 4);
+
+    auto t0 = graph.add_read_node("CCA");
+    auto t1 = graph.add_read_node("CCC");
+    graph.add_node_ref_pos(t0, 0);
+    graph.add_node_ref_pos(t1, 1);
+    graph.add_edge(b0, t0);
+    graph.add_edge(t0, t1);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_TRUE(graph.is_node_removed(t0));
+    EXPECT_TRUE(graph.is_node_removed(t1));
+}
+
+TEST(GraphCleaner, PrunesEdgesUsingRegionalMeanDepthFloor) {
+    sharda::DBG graph(3);
+    auto b0 = graph.add_backbone_node("AAA", 0, -1);
+    auto b1 = graph.add_backbone_node("AAT", 1, -1);
+    auto b2 = graph.add_backbone_node("ATC", 2, -1);
+    graph.node_mut(b0).depth = 8;
+    graph.node_mut(b1).depth = 8;
+    graph.node_mut(b2).depth = 8;
+
+    add_edge_copies(graph, b0, b1, 4);
+    add_edge_copies(graph, b1, b2, 4);
+
+    auto r0 = graph.add_read_node("CCA");
+    auto r1 = graph.add_read_node("CCC");
+    graph.add_node_ref_pos(r0, 0);
+    graph.add_node_ref_pos(r1, 1);
+    add_edge_copies(graph, b0, r0, 2);
+    graph.add_edge(r0, r1);
+    add_edge_copies(graph, r1, b2, 2);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_FALSE(has_edge(graph, r0, r1));
+    EXPECT_TRUE(has_edge(graph, b0, r0));
+    EXPECT_TRUE(has_edge(graph, r1, b2));
+}
+
+TEST_F(TempFileTest, DebugArtifactsUseStableNodeIds) {
+    sharda::DBG graph_a(3);
+    auto a0 = graph_a.add_backbone_node("AAA", 0, -1);
+    auto a1 = graph_a.add_backbone_node("AAT", 1, -1);
+    auto ax = graph_a.add_read_node("CCA");
+    auto ay = graph_a.add_read_node("CCG");
+    graph_a.add_node_ref_pos(ax, 1);
+    graph_a.add_node_ref_pos(ay, 2);
+    graph_a.add_edge(a0, ax);
+    graph_a.add_edge(ax, ay);
+    graph_a.add_edge(ay, a1);
+
+    sharda::DBG graph_b(3);
+    auto b0 = graph_b.add_backbone_node("AAA", 0, -1);
+    auto b1 = graph_b.add_backbone_node("AAT", 1, -1);
+    auto by = graph_b.add_read_node("CCG");
+    auto bx = graph_b.add_read_node("CCA");
+    graph_b.add_node_ref_pos(bx, 1);
+    graph_b.add_node_ref_pos(by, 2);
+    graph_b.add_edge(b0, bx);
+    graph_b.add_edge(bx, by);
+    graph_b.add_edge(by, b1);
+
+    const std::string gfa_a = tmp_path("graph_a.gfa");
+    const std::string gfa_b = tmp_path("graph_b.gfa");
+    const std::string json_a = tmp_path("graph_a.json");
+    const std::string json_b = tmp_path("graph_b.json");
+    sharda::write_gfa(gfa_a, graph_a);
+    sharda::write_gfa(gfa_b, graph_b);
+    sharda::write_dbg_json(json_a, graph_a);
+    sharda::write_dbg_json(json_b, graph_b);
+
+    EXPECT_EQ(read_text_file(gfa_a), read_text_file(gfa_b));
+    EXPECT_EQ(read_text_file(json_a), read_text_file(json_b));
+}
+
+TEST(ReadAdder, OrrChoosesClosestMatchingBackboneNodes) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTTACGTA", {});
+
+    sharda::ReadPair pair;
+    pair.read1.name = "orr_closest";
+    pair.read1.seq = "ACGTA";
+    pair.read1.cigar = {{sharda::CigarOp::M, 5}};
+    pair.read1.ref_start = 4;
+    pair.read1.ref_end = 9;
+    pair.read1.flag = 0x43;
+
+    pair.read2.name = "mate_unused";
+    pair.read2.seq = "AC";
+    pair.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair.read2.ref_start = 0;
+    pair.read2.ref_end = 2;
+    pair.read2.flag = 0x83;
+
+    std::vector<std::string> traced_reads = {"orr_closest"};
+    std::vector<sharda::ReadTraceRecord> traces;
+    sharda::ReadTraceSink trace_sink{&traced_reads, &traces};
+
+    sharda::add_read_pair(pair, graph, {}, trace_sink);
+
+    ASSERT_EQ(traces.size(), 1u);
+    ASSERT_EQ(traces[0].raw_nodes.size(), 3u);
+    EXPECT_EQ(traces[0].raw_nodes[0].node_id, graph.backbone_node_at(5));
+    EXPECT_EQ(traces[0].raw_nodes[1].node_id, graph.backbone_node_at(6));
+    EXPECT_EQ(traces[0].raw_nodes[2].node_id, graph.backbone_node_at(7));
+}
+
+TEST(ReadAdder, OrrDivergentFirstKmerBranchesFromPreviousBackbone) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    sharda::ReadPair pair;
+    pair.read1.name = "orr_branch";
+    pair.read1.seq = "TTTAC";
+    pair.read1.cigar = {{sharda::CigarOp::M, 5}};
+    pair.read1.ref_start = 1;
+    pair.read1.ref_end = 6;
+    pair.read1.flag = 0x43;
+
+    pair.read2.name = "mate_unused";
+    pair.read2.seq = "AC";
+    pair.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair.read2.ref_start = 0;
+    pair.read2.ref_end = 2;
+    pair.read2.flag = 0x83;
+
+    sharda::add_read_pair(pair, graph, {});
+
+    uint64_t first_read_node = graph.find_read_node("TTT");
+    ASSERT_NE(first_read_node, UINT64_MAX);
+    EXPECT_TRUE(graph.node(first_read_node).ref_positions.count(1) > 0);
+
+    uint64_t predecessor = graph.backbone_node_at(0);
+    ASSERT_NE(predecessor, UINT64_MAX);
+
+    bool found_branch = false;
+    for (uint64_t edge_index : graph.out_edges(predecessor)) {
+        if (graph.edges()[edge_index].to == first_read_node) {
+            found_branch = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_branch);
+}
+
+TEST(ReadAdder, OrrReadNodesAccumulateImpliedCoordinates) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    sharda::ReadPair pair1;
+    pair1.read1.name = "orr_coords_1";
+    pair1.read1.seq = "TTTAC";
+    pair1.read1.cigar = {{sharda::CigarOp::M, 5}};
+    pair1.read1.ref_start = 1;
+    pair1.read1.ref_end = 6;
+    pair1.read1.flag = 0x43;
+    pair1.read2.name = "mate_unused_1";
+    pair1.read2.seq = "AC";
+    pair1.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair1.read2.ref_start = 0;
+    pair1.read2.ref_end = 2;
+    pair1.read2.flag = 0x83;
+
+    sharda::ReadPair pair2;
+    pair2.read1.name = "orr_coords_2";
+    pair2.read1.seq = "TTTAC";
+    pair2.read1.cigar = {{sharda::CigarOp::M, 5}};
+    pair2.read1.ref_start = 4;
+    pair2.read1.ref_end = 9;
+    pair2.read1.flag = 0x43;
+    pair2.read2.name = "mate_unused_2";
+    pair2.read2.seq = "AC";
+    pair2.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair2.read2.ref_start = 0;
+    pair2.read2.ref_end = 2;
+    pair2.read2.flag = 0x83;
+
+    sharda::add_read_pair(pair1, graph, {});
+    sharda::add_read_pair(pair2, graph, {});
+
+    uint64_t first_read_node = graph.find_read_node("TTT");
+    ASSERT_NE(first_read_node, UINT64_MAX);
+    EXPECT_TRUE(graph.node(first_read_node).ref_positions.count(1) > 0);
+    EXPECT_TRUE(graph.node(first_read_node).ref_positions.count(4) > 0);
+}
+
 TEST_F(TempFileTest, DebugArtifactsWriteJsonAndViewer) {
     sharda::DBG graph(3);
     sharda::build_backbone(graph, "ACGTAC", {});
@@ -210,10 +555,9 @@ TEST_F(TempFileTest, UnitigJsonIncludesNodeIds) {
     EXPECT_NE(content.find("\"node_ids\""), std::string::npos);
 }
 
-TEST(ReadTrace, CapturesRawNodesAndUnitigMapping) {
-    sharda::DBG graph(3);
-    sharda::build_backbone(graph, "ACGTAC", {});
+namespace {
 
+sharda::ReadPair make_trace_pair() {
     sharda::ReadPair pair;
     pair.read1.name = "trace_me";
     pair.read1.seq = "ACGTAC";
@@ -222,21 +566,55 @@ TEST(ReadTrace, CapturesRawNodesAndUnitigMapping) {
     pair.read1.ref_end = 6;
     pair.read1.flag = 0x43;
     pair.read2.name = "trace_me";
-    pair.read2.seq = "CGTACG";
-    pair.read2.cigar = {{sharda::CigarOp::M, 6}};
+    pair.read2.seq = "AC";
+    pair.read2.cigar = {{sharda::CigarOp::M, 2}};
     pair.read2.ref_start = 1;
-    pair.read2.ref_end = 7;
+    pair.read2.ref_end = 3;
     pair.read2.flag = 0x83;
+    return pair;
+}
 
+std::vector<sharda::ReadTraceRecord> build_trace_records(sharda::DBG& graph) {
+    auto pair = make_trace_pair();
     std::vector<std::string> traced_reads = {"trace_me"};
     std::vector<sharda::ReadTraceRecord> traces;
     sharda::ReadTraceSink trace_sink{&traced_reads, &traces};
-
     sharda::add_read_pair(pair, graph, {}, trace_sink);
+    return traces;
+}
+
+} // namespace
+
+TEST(ReadTrace, CapturesRawNodesBeforeUnitigBuild) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    auto traces = build_trace_records(graph);
 
     ASSERT_EQ(traces.size(), 2u);
     ASSERT_FALSE(traces[0].raw_nodes.empty());
+    EXPECT_TRUE(traces[1].raw_nodes.empty());
     EXPECT_EQ(traces[0].read_name, "trace_me");
+}
+
+TEST(ReadTrace, UnitigBuildSucceedsForTraceFixture) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    auto traces = build_trace_records(graph);
+
+    ASSERT_EQ(traces.size(), 2u);
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+    EXPECT_NE(ug.node_to_unitig(traces[0].raw_nodes[0].node_id), UINT64_MAX);
+}
+
+TEST(ReadTrace, FinalizeReadTracesMapsUnitigs) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    auto traces = build_trace_records(graph);
 
     sharda::UnitigGraph ug;
     ASSERT_TRUE(ug.build(graph));
@@ -413,6 +791,37 @@ TEST(UnitigGraph, BranchPreserved) {
     bool ok = ug.build(graph);
     EXPECT_TRUE(ok);
     EXPECT_GT(ug.unitig_count(), 1u); // should not collapse everything
+}
+
+TEST(UnitigGraph, LinearCollapseWithReverseIdOrder) {
+    sharda::DBG graph(3);
+    auto sink = graph.add_backbone_node("GTA", 2, -1);
+    auto mid = graph.add_backbone_node("CGT", 1, -1);
+    auto source = graph.add_backbone_node("ACG", 0, -1);
+
+    graph.add_edge(source, mid);
+    graph.add_edge(mid, sink);
+
+    sharda::UnitigGraph ug;
+    bool ok = ug.build(graph);
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(ug.unitig_count(), 1u);
+    ASSERT_EQ(ug.unitigs().size(), 1u);
+    EXPECT_EQ(ug.unitig(0).node_ids.size(), 3u);
+}
+
+TEST(UnitigGraph, DropsIsolatedSingletonKmerUnitigs) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {}); // one connected unitig
+    auto isolated = graph.add_read_node("TTT");
+
+    sharda::UnitigGraph ug;
+    bool ok = ug.build(graph);
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(ug.unitig_count(), 1u);
+    EXPECT_EQ(ug.node_to_unitig(isolated), UINT64_MAX);
 }
 
 // ── Target regions BED reader test ──────────────────────────────────────────

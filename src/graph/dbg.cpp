@@ -1,6 +1,7 @@
 #include "graph/dbg.h"
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <cmath>
 
 namespace sharda {
 
@@ -17,7 +18,9 @@ void DBG::ensure_adj_size(uint64_t id) {
 uint64_t DBG::add_backbone_node(const std::string& kmer, int32_t ref_pos, int tr_id) {
     uint64_t id = nodes_.size();
     nodes_.push_back({id, kmer, ref_pos, tr_id, true, 0});
+    nodes_.back().add_ref_pos(ref_pos);
     pos_to_node_[ref_pos] = id;
+    backbone_kmer_to_nodes_[kmer].push_back(id);
     if (tr_id >= 0) {
         tr_to_nodes_[tr_id].push_back(id);
     }
@@ -41,9 +44,42 @@ uint64_t DBG::backbone_node_at(int32_t ref_pos) const {
     return (it != pos_to_node_.end()) ? it->second : UINT64_MAX;
 }
 
+uint64_t DBG::closest_backbone_node_for_kmer(const std::string& kmer,
+                                            int32_t implied_ref_pos) const {
+    auto it = backbone_kmer_to_nodes_.find(kmer);
+    if (it == backbone_kmer_to_nodes_.end() || it->second.empty()) {
+        return UINT64_MAX;
+    }
+
+    uint64_t best_id = UINT64_MAX;
+    int64_t best_distance = 0;
+    int32_t best_pos = 0;
+
+    for (uint64_t node_id : it->second) {
+        const auto& backbone_node = node(node_id);
+        int32_t candidate_pos = backbone_node.ref_pos;
+        int64_t distance = std::llabs(static_cast<long long>(candidate_pos) - implied_ref_pos);
+        if (best_id == UINT64_MAX || distance < best_distance ||
+            (distance == best_distance && candidate_pos < best_pos)) {
+            best_id = node_id;
+            best_distance = distance;
+            best_pos = candidate_pos;
+        }
+    }
+
+    return best_id;
+}
+
 uint64_t DBG::find_read_node(const std::string& kmer) const {
     auto it = kmer_to_node_.find(kmer);
     return (it != kmer_to_node_.end()) ? it->second : UINT64_MAX;
+}
+
+void DBG::add_node_ref_pos(uint64_t node_id, int32_t ref_pos) {
+    if (node_id == UINT64_MAX || node_id >= nodes_.size()) {
+        return;
+    }
+    nodes_[node_id].add_ref_pos(ref_pos);
 }
 
 size_t DBG::active_node_count() const {

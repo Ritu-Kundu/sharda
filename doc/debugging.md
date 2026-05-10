@@ -64,7 +64,7 @@ per region:
 The simplest first pass is:
 
 1. open `raw.gfa` to inspect the initial graph after read addition
-2. open `clean.gfa` to compare the graph after pruning and bubble removal
+2. open `clean.gfa` to compare the graph after tip pruning and low-weight edge pruning
 3. open `unitig.gfa` to inspect the compacted graph before flow decomposition
 4. open `raw.json`, `clean.json`, or `unitig.json` if you want structured
    fields rather than GFA tags
@@ -97,6 +97,9 @@ tag     TR:i:-1
 
 This lookup currently reads GFA segment (`S`) lines, so the node name must be
 the segment ID used in the relevant `.gfa` file.
+
+Those segment IDs are stable serializer IDs, not raw insertion-order node IDs,
+so repeated runs on the same input produce the same GFA/JSON node names.
 
 You can also inspect persisted JSON trace artifacts without rerunning the
 pipeline:
@@ -207,12 +210,16 @@ DBG snapshot after graph cleaning:
 
 - tip removal
 - low-weight edge pruning
-- bubble popping
+- bubble popping skipped
 
 ### `unitig.gfa`
 
 Compacted unitig graph built from the cleaned DBG, immediately before flow
 decomposition.
+
+This file shows only ordinary unitig graph edges as `L` lines. Haplotype edges
+are preserved in `unitig.json` as phasing constraints, but they are not drawn
+as GFA links.
 
 ### `raw.json` and `clean.json`
 
@@ -291,7 +298,9 @@ L <from> + <to> + <k-1>M RC:i:<weight>
 ```
 
 Unitig GFA uses the unitig sequence on segment lines and unitig-level edge
-weights on link lines.
+weights on link lines. If a singleton unitig appears in `unitig.gfa`, it now
+has at least one ordinary unitig-edge connection elsewhere in the graph;
+haplotype-edge-only singletons are filtered out before emission.
 
 ### DBG JSON format
 
@@ -445,8 +454,11 @@ region across the three stages.
 - If a path exists in the raw graph but disappears in the cleaned graph, check
   edge weights and backbone status to understand whether pruning removed it.
 
-The current framework does not yet emit explicit “why this node was removed”
-events, so stage-to-stage comparison is still the main debugging method.
+Cleaner debug logging now reports why a traced tip was removed or rejected,
+including chain length, mean tip support, local average support, and the
+applied threshold. Stage-to-stage comparison is still useful, but you can now
+also inspect cleaner logs to distinguish “not a tip”, “too long”, and
+“support too high” cases.
 
 ## Recommended Workflow For Issues
 

@@ -10,14 +10,20 @@ find_package(Threads REQUIRED)
 # ── Options ──────────────────────────────────────────────────────────────────
 option(SHARDA_BUILD_TESTS "Build unit tests" ON)
 option(SHARDA_FETCH_DEPS "Fetch dependencies when not available locally" ON)
+option(SHARDA_USE_SYSTEM_SPDLOG "Use a system-installed spdlog package instead of the bundled dependency" OFF)
 
 # ── FetchContent dependencies ────────────────────────────────────────────────
 include(FetchContent)
 
 # spdlog
-find_package(spdlog CONFIG QUIET)
+if(SHARDA_USE_SYSTEM_SPDLOG)
+    find_package(spdlog CONFIG QUIET)
+endif()
+
 if(NOT TARGET spdlog::spdlog)
     if(SHARDA_FETCH_DEPS)
+        set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)
+        set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
         FetchContent_Declare(spdlog
             GIT_REPOSITORY https://github.com/gabime/spdlog.git
             GIT_TAG        v1.15.3)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,26 @@ struct Node {
     int         tr_id     = -1; // -1 if not in any TR
     bool        is_backbone = false;
     uint32_t    depth     = 0;  // number of reads covering this node
+    std::set<int32_t> ref_positions;
+
+    void add_ref_pos(int32_t pos) {
+        if (pos < 0) {
+            return;
+        }
+        ref_positions.insert(pos);
+        if (!is_backbone && (ref_pos < 0 || pos < ref_pos)) {
+            ref_pos = pos;
+        }
+    }
+
+    bool has_ref_pos_in_range(int32_t start, int32_t end) const {
+        if (ref_positions.empty()) {
+            return ref_pos >= start && ref_pos < end;
+        }
+
+        auto it = ref_positions.lower_bound(start);
+        return it != ref_positions.end() && *it < end;
+    }
 };
 
 // ── Directed edge in the DBG ────────────────────────────────────────────────

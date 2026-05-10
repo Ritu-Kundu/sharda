@@ -76,17 +76,32 @@ bool UnitigGraph::build(const DBG& source) {
         bool is_internal = (in_e.size() == 1 && out_e.size() == 1);
         if (is_internal || visited[i]) continue;
 
-        // This is a unitig start point. Trace forward along linear chain.
+        // This is a unitig start point. Trace backward and forward along the
+        // same linear chain so compaction does not depend on node ID order.
         std::vector<uint64_t> path;
         uint64_t cur = nd.id;
 
-        // Also trace backward first if this node has in-degree == 1 and
-        // is a dead-end from another branch (shouldn't happen since we
-        // start from non-internal, but be safe).
         path.push_back(cur);
         visited[cur] = true;
 
+        // Extend backward first. This handles linear chains whose sink or
+        // branch endpoint has a lower node ID than the upstream nodes.
+        while (true) {
+            const auto& ie = source.in_edges(cur);
+            if (ie.size() != 1) break;
+            uint64_t prev = source.edges()[ie[0]].from;
+            if (visited[prev]) break;
+            const auto& prev_out = source.out_edges(prev);
+            if (prev_out.size() != 1) break;
+            path.insert(path.begin(), prev);
+            visited[prev] = true;
+            const auto& prev_in = source.in_edges(prev);
+            if (prev_in.size() != 1) break;
+            cur = prev;
+        }
+
         // Extend forward
+        cur = nd.id;
         while (true) {
             const auto& oe = source.out_edges(cur);
             if (oe.size() != 1) break;
@@ -159,6 +174,101 @@ bool UnitigGraph::build(const DBG& source) {
         unitigs_.push_back(std::move(u));
     }
 
+    std::vector<uint64_t> predecessor(unitigs_.size(), UINT64_MAX);
+    std::vector<uint64_t> successor(unitigs_.size(), UINT64_MAX);
+    for (size_t unitig_id = 0; unitig_id < unitigs_.size(); ++unitig_id) {
+        const auto& unitig = unitigs_[unitig_id];
+
+        const uint64_t first_node = unitig.node_ids.front();
+        const auto& in_edges = source.in_edges(first_node);
+        if (in_edges.size() == 1) {
+            const uint64_t prev_node = source.edges()[in_edges[0]].from;
+            const uint64_t prev_unitig = node_to_unitig(prev_node);
+            if (prev_unitig != UINT64_MAX && prev_unitig != unitig_id &&
+                source.out_edges(prev_node).size() == 1) {
+                predecessor[unitig_id] = prev_unitig;
+            }
+        }
+
+        const uint64_t last_node = unitig.node_ids.back();
+        const auto& out_edges = source.out_edges(last_node);
+        if (out_edges.size() == 1) {
+            const uint64_t next_node = source.edges()[out_edges[0]].to;
+            const uint64_t next_unitig = node_to_unitig(next_node);
+            if (next_unitig != UINT64_MAX && next_unitig != unitig_id &&
+                source.in_edges(next_node).size() == 1) {
+                successor[unitig_id] = next_unitig;
+            }
+        }
+    }
+
+    auto build_unitig_from_path = [&source](uint64_t unitig_id,
+                                            const std::vector<uint64_t>& path) {
+        Unitig unitig;
+        unitig.id = unitig_id;
+        unitig.node_ids = path;
+        unitig.sequence = source.node(path[0]).kmer;
+        for (size_t index = 1; index < path.size(); ++index) {
+            unitig.sequence += source.node(path[index]).kmer.back();
+        }
+
+        double total_depth = 0.0;
+        for (uint64_t node_id : path) {
+            total_depth += source.node(node_id).depth;
+        }
+        unitig.mean_depth = total_depth / path.size();
+        return unitig;
+    };
+
+    std::vector<bool> merged_visited(unitigs_.size(), false);
+    std::vector<Unitig> merged_unitigs;
+    merged_unitigs.reserve(unitigs_.size());
+
+    auto append_chain = [&](uint64_t start_unitig) {
+        std::vector<uint64_t> merged_path;
+        uint64_t current = start_unitig;
+
+        while (!merged_visited[current]) {
+            merged_visited[current] = true;
+            const auto& current_nodes = unitigs_[current].node_ids;
+            merged_path.insert(merged_path.end(), current_nodes.begin(), current_nodes.end());
+
+            const uint64_t next = successor[current];
+            if (next == UINT64_MAX || predecessor[next] != current) {
+                break;
+            }
+            current = next;
+        }
+
+        merged_unitigs.push_back(build_unitig_from_path(merged_unitigs.size(), merged_path));
+    };
+
+    for (size_t unitig_id = 0; unitig_id < unitigs_.size(); ++unitig_id) {
+        if (merged_visited[unitig_id] || predecessor[unitig_id] != UINT64_MAX) {
+            continue;
+        }
+        append_chain(unitig_id);
+    }
+
+    for (size_t unitig_id = 0; unitig_id < unitigs_.size(); ++unitig_id) {
+        if (merged_visited[unitig_id]) {
+            continue;
+        }
+        merged_visited[unitig_id] = true;
+        merged_unitigs.push_back(
+            build_unitig_from_path(merged_unitigs.size(), unitigs_[unitig_id].node_ids));
+    }
+
+    if (merged_unitigs.size() != unitigs_.size()) {
+        unitigs_ = std::move(merged_unitigs);
+        node_to_unitig_.clear();
+        for (const auto& unitig : unitigs_) {
+            for (uint64_t node_id : unitig.node_ids) {
+                node_to_unitig_[node_id] = unitig.id;
+            }
+        }
+    }
+
     spdlog::info("Unitig graph: {} unitigs from {} active nodes ({} total nodes)",
                  unitigs_.size(), active_nodes, num_nodes);
 
@@ -203,6 +313,61 @@ bool UnitigGraph::build(const DBG& source) {
                 return he.weight < 0.05 * min_cov;
             }),
         hap_edges_.end());
+
+    std::vector<size_t> graph_incident_counts(unitigs_.size(), 0);
+    for (const auto& edge : edges_) {
+        graph_incident_counts[edge.from]++;
+        graph_incident_counts[edge.to]++;
+    }
+
+    std::vector<uint64_t> unitig_id_remap(unitigs_.size(), UINT64_MAX);
+    std::vector<Unitig> filtered_unitigs;
+    filtered_unitigs.reserve(unitigs_.size());
+    for (size_t old_id = 0; old_id < unitigs_.size(); ++old_id) {
+        const auto& unitig = unitigs_[old_id];
+        const bool is_isolated_singleton =
+            unitig.node_ids.size() == 1 && graph_incident_counts[old_id] == 0;
+        if (is_isolated_singleton) {
+            continue;
+        }
+
+        Unitig kept = unitig;
+        kept.id = filtered_unitigs.size();
+        unitig_id_remap[old_id] = kept.id;
+        filtered_unitigs.push_back(std::move(kept));
+    }
+
+    if (filtered_unitigs.size() != unitigs_.size()) {
+        std::vector<Edge> remapped_edges;
+        remapped_edges.reserve(edges_.size());
+        for (const auto& edge : edges_) {
+            if (unitig_id_remap[edge.from] == UINT64_MAX || unitig_id_remap[edge.to] == UINT64_MAX) {
+                continue;
+            }
+            remapped_edges.push_back({unitig_id_remap[edge.from], unitig_id_remap[edge.to], edge.weight});
+        }
+
+        std::vector<HaplotypeEdge> remapped_hap_edges;
+        remapped_hap_edges.reserve(hap_edges_.size());
+        for (const auto& hap_edge : hap_edges_) {
+            if (unitig_id_remap[hap_edge.from_node] == UINT64_MAX ||
+                unitig_id_remap[hap_edge.to_node] == UINT64_MAX) {
+                continue;
+            }
+            remapped_hap_edges.push_back(
+                {unitig_id_remap[hap_edge.from_node], unitig_id_remap[hap_edge.to_node], hap_edge.weight});
+        }
+
+        unitigs_ = std::move(filtered_unitigs);
+        edges_ = std::move(remapped_edges);
+        hap_edges_ = std::move(remapped_hap_edges);
+        node_to_unitig_.clear();
+        for (const auto& unitig : unitigs_) {
+            for (uint64_t node_id : unitig.node_ids) {
+                node_to_unitig_[node_id] = unitig.id;
+            }
+        }
+    }
 
     spdlog::info("Unitig graph: {} edges, {} haplotype edges",
                  edges_.size(), hap_edges_.size());

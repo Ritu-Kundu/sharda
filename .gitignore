@@ -12,6 +12,7 @@
 
 # CMake and build outputs
 /build/
+/build_noconda/
 /cmake-build-*/
 CMakeCache.txt
 CMakeFiles/

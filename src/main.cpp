@@ -245,6 +245,11 @@ int run_debug_read_lookup(const Args& args) {
     }
 
     std::string artifact_path = (fs::path(args.debug_dir) / "read_traces.json").string();
+    if (!fs::exists(artifact_path)) {
+        std::cerr << "Error: read trace artifact not found: " << artifact_path << '\n'
+                  << "Hint: rerun assembly with -d --trace-read READ_NAME to create read_traces.json\n";
+        return 1;
+    }
     auto object = sharda::debug_query_find_read_trace_object(
         sharda::debug_query_read_text_file(artifact_path), args.debug_read);
     if (!object) {
@@ -269,6 +274,11 @@ int run_debug_locus_lookup(const Args& args) {
     }
 
     std::string artifact_path = (fs::path(args.debug_dir) / "locus_traces.json").string();
+    if (!fs::exists(artifact_path)) {
+        std::cerr << "Error: locus trace artifact not found: " << artifact_path << '\n'
+                  << "Hint: rerun assembly with -d --trace-locus START:LENGTH to create locus_traces.json\n";
+        return 1;
+    }
     auto object = sharda::debug_query_find_locus_trace_object(
         sharda::debug_query_read_text_file(artifact_path), request.start, request.length);
     if (!object) {

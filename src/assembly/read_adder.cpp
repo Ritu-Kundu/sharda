@@ -9,6 +9,10 @@ namespace sharda {
 
 namespace {
 
+std::vector<int32_t> to_ref_position_vector(const std::set<int32_t>& ref_positions) {
+    return {ref_positions.begin(), ref_positions.end()};
+}
+
 bool should_trace_read(const ReadTraceSink& trace_sink, const std::string& read_name) {
     if (!trace_sink.enabled()) {
         return false;
@@ -31,17 +35,19 @@ void append_trace_node(ReadTraceRecord* trace_record,
     }
 
     const auto& node = graph.node(node_id);
-    trace_record->raw_nodes.push_back({
-        node.id,
-        node.kmer,
-        created,
-        node.is_backbone,
-        node.ref_pos,
-        node.tr_id,
-        false,
-        UINT64_MAX,
-        ""
-    });
+
+    ReadTraceNode trace_node;
+    trace_node.node_id = node.id;
+    trace_node.sequence = node.kmer;
+    trace_node.created = created;
+    trace_node.is_backbone = node.is_backbone;
+    trace_node.ref_pos = node.ref_pos;
+    trace_node.tr_id = node.tr_id;
+    trace_node.removed_after_clean = false;
+    trace_node.unitig_id = UINT64_MAX;
+    trace_node.unitig_sequence.clear();
+    trace_node.ref_positions = to_ref_position_vector(node.ref_positions);
+    trace_record->raw_nodes.push_back(std::move(trace_node));
 }
 
 ReadTraceRecord* start_trace_record(const ReadTraceSink& trace_sink,
@@ -63,99 +69,56 @@ ReadTraceRecord* start_trace_record(const ReadTraceSink& trace_sink,
     return &trace_sink.records->back();
 }
 
-/// Walk the CIGAR to produce (read_offset, ref_pos) pairs for each aligned base.
-/// Includes soft-clipped bases with ref_pos = -1.
-struct AlignedBase {
-    int read_offset;
-    int32_t ref_pos; // -1 for soft-clip/insertion
-};
-
-std::vector<AlignedBase> cigar_walk(const AlignedRead& read) {
-    std::vector<AlignedBase> bases;
-    bases.reserve(read.seq.size());
-    int roff = 0;       // read offset
-    int32_t rpos = read.ref_start; // ref position
-
-    for (const auto& c : read.cigar) {
-        switch (c.op) {
-        case CigarOp::M:
-        case CigarOp::EQ:
-        case CigarOp::X:
-            for (uint32_t i = 0; i < c.len; ++i) {
-                bases.push_back({roff++, rpos++});
-            }
-            break;
-        case CigarOp::I:
-            for (uint32_t i = 0; i < c.len; ++i) {
-                bases.push_back({roff++, -1});
-            }
-            break;
-        case CigarOp::D:
-        case CigarOp::N:
-            rpos += c.len;
-            break;
-        case CigarOp::S:
-            for (uint32_t i = 0; i < c.len; ++i) {
-                bases.push_back({roff++, -1});
-            }
-            break;
-        case CigarOp::H:
-        case CigarOp::P:
-            break; // hard-clip / padding: skip
-        }
+uint64_t choose_path_node_for_kmer(const std::string& kmer,
+                                   int32_t implied_ref_pos,
+                                   DBG& graph,
+                                   bool& created) {
+    uint64_t backbone_nid = graph.closest_backbone_node_for_kmer(kmer, implied_ref_pos);
+    if (backbone_nid != UINT64_MAX) {
+        created = false;
+        return backbone_nid;
     }
-    return bases;
+
+    uint64_t existing_read_nid = graph.find_read_node(kmer);
+    created = existing_read_nid == UINT64_MAX;
+    uint64_t nid = graph.add_read_node(kmer);
+    graph.add_node_ref_pos(nid, implied_ref_pos);
+    return nid;
 }
 
-/// Add an ORR-style read path using alignment positions.
+/// Add an ORR-style read path using implied coordinates from the alignment start.
 /// Returns (first_node_id, last_node_id) added to the path.
 std::pair<uint64_t, uint64_t> add_orr_path(
     const AlignedRead& read,
     DBG& graph,
-    const std::vector<AlignedBase>& aligned_bases,
     ReadTraceRecord* trace_record = nullptr)
 {
     int k = graph.k();
     auto kmers = extract_kmers(read.seq, k);
     if (kmers.empty()) return {UINT64_MAX, UINT64_MAX};
 
-    // For each kmer, determine its ref_pos from the first base of the kmer
-    // that has a valid ref_pos (the aligned start of the kmer).
     uint64_t first_nid = UINT64_MAX;
     uint64_t prev_nid  = UINT64_MAX;
 
     for (int ki = 0; ki < static_cast<int>(kmers.size()); ++ki) {
-        // Find the ref_pos for this kmer: use the ref_pos of aligned_bases[ki]
-        // if available
-        int32_t kmer_ref_pos = -1;
-        if (ki < static_cast<int>(aligned_bases.size())) {
-            kmer_ref_pos = aligned_bases[ki].ref_pos;
-        }
-
-        uint64_t nid;
+        int32_t implied_ref_pos = read.ref_start + ki;
         bool created = false;
-        if (kmer_ref_pos >= 0) {
-            // Try to match to a backbone node
-            nid = graph.backbone_node_at(kmer_ref_pos);
-            if (nid != UINT64_MAX && graph.node(nid).kmer == kmers[ki]) {
-                // Reuse backbone node
-                graph.node_mut(nid).depth++;
-            } else {
-                // kmer differs from backbone at this position: novel node
-                created = graph.find_read_node(kmers[ki]) == UINT64_MAX;
-                nid = graph.add_read_node(kmers[ki]);
-                graph.node_mut(nid).depth++;
+        uint64_t nid = choose_path_node_for_kmer(kmers[ki], implied_ref_pos, graph, created);
+        graph.node_mut(nid).depth++;
+
+        if (first_nid == UINT64_MAX) {
+            first_nid = nid;
+
+            if (!graph.node(nid).is_backbone && implied_ref_pos > 0) {
+                uint64_t predecessor = graph.backbone_node_at(implied_ref_pos - 1);
+                if (predecessor != UINT64_MAX && predecessor != nid) {
+                    graph.add_edge(predecessor, nid);
+                }
             }
-        } else {
-            // Soft-clip or insertion: novel node
-            created = graph.find_read_node(kmers[ki]) == UINT64_MAX;
-            nid = graph.add_read_node(kmers[ki]);
-            graph.node_mut(nid).depth++;
         }
 
         append_trace_node(trace_record, graph, nid, created);
 
-        if (first_nid == UINT64_MAX) first_nid = nid;
         if (prev_nid != UINT64_MAX && prev_nid != nid) {
             graph.add_edge(prev_nid, nid);
         }
@@ -170,7 +133,6 @@ std::pair<uint64_t, uint64_t> add_irr_path(
     const AlignedRead& read,
     int tr_id,
     DBG& graph,
-    const std::vector<AlignedBase>& aligned_bases,
     ReadTraceRecord* trace_record = nullptr)
 {
     int k = graph.k();
@@ -180,8 +142,8 @@ std::pair<uint64_t, uint64_t> add_irr_path(
     auto anchors = find_and_chain_anchors(kmers, graph, tr_id);
 
     if (anchors.empty()) {
-        // Fall back to ORR-style
-        return add_orr_path(read, graph, aligned_bases, trace_record);
+        // Fall back to ORR-style implied-coordinate placement.
+        return add_orr_path(read, graph, trace_record);
     }
 
     uint64_t first_nid = UINT64_MAX;
@@ -231,23 +193,29 @@ void add_read_pair(ReadPair& pair, DBG& graph,
     auto cls1 = classify_read(pair.read1, trs);
     auto cls2 = classify_read(pair.read2, trs);
 
-    auto ab1 = cigar_walk(pair.read1);
-    auto ab2 = cigar_walk(pair.read2);
+    if (trace_sink.enabled()) {
+        size_t extra_records = 0;
+        extra_records += should_trace_read(trace_sink, pair.read1.name) ? 1u : 0u;
+        extra_records += should_trace_read(trace_sink, pair.read2.name) ? 1u : 0u;
+        if (extra_records > 0) {
+            trace_sink.records->reserve(trace_sink.records->size() + extra_records);
+        }
+    }
 
     std::pair<uint64_t, uint64_t> path1, path2;
     ReadTraceRecord* trace1 = start_trace_record(trace_sink, pair.read1, "read1", cls1);
     ReadTraceRecord* trace2 = start_trace_record(trace_sink, pair.read2, "read2", cls2);
 
     if (cls1.type == ReadType::IRR) {
-        path1 = add_irr_path(pair.read1, cls1.tr_id, graph, ab1, trace1);
+        path1 = add_irr_path(pair.read1, cls1.tr_id, graph, trace1);
     } else {
-        path1 = add_orr_path(pair.read1, graph, ab1, trace1);
+        path1 = add_orr_path(pair.read1, graph, trace1);
     }
 
     if (cls2.type == ReadType::IRR) {
-        path2 = add_irr_path(pair.read2, cls2.tr_id, graph, ab2, trace2);
+        path2 = add_irr_path(pair.read2, cls2.tr_id, graph, trace2);
     } else {
-        path2 = add_orr_path(pair.read2, graph, ab2, trace2);
+        path2 = add_orr_path(pair.read2, graph, trace2);
     }
 
     // Add haplotype edge if at least one read is evidence
