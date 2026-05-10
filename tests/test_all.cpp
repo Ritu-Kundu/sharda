@@ -583,6 +583,24 @@ TEST_F(TempFileTest, UnitigJsonIncludesNodeIds) {
                         std::istreambuf_iterator<char>());
     EXPECT_NE(content.find("\"graph_kind\": \"unitig\""), std::string::npos);
     EXPECT_NE(content.find("\"node_ids\""), std::string::npos);
+    EXPECT_NE(content.find("\"ref_pos\": 0"), std::string::npos);
+    EXPECT_NE(content.find("\"ref_positions\": [0, 1, 2, 3]"), std::string::npos);
+}
+
+TEST_F(TempFileTest, UnitigGfaIncludesCoordinateTags) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTAC", {});
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    std::string path = tmp_path("unitig.gfa");
+    sharda::write_unitig_gfa(path, ug);
+
+    std::ifstream in(path);
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\tRP:i:0\tRPS:Z:0,1,2,3"), std::string::npos);
 }
 
 namespace {

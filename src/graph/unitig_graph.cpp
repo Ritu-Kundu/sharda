@@ -61,6 +61,33 @@ bool UnitigGraph::build(const DBG& source) {
     // and haven't been assigned to a unitig yet.
     std::vector<bool> visited(num_nodes, false);
 
+    auto build_unitig_from_path = [&source](uint64_t unitig_id,
+                                            const std::vector<uint64_t>& path) {
+        Unitig unitig;
+        unitig.id = unitig_id;
+        unitig.node_ids = path;
+        unitig.sequence = source.node(path[0]).kmer;
+        for (size_t index = 1; index < path.size(); ++index) {
+            unitig.sequence += source.node(path[index]).kmer.back();
+        }
+
+        double total_depth = 0.0;
+        for (uint64_t node_id : path) {
+            const auto& node = source.node(node_id);
+            total_depth += node.depth;
+            if (!node.ref_positions.empty()) {
+                unitig.ref_positions.insert(node.ref_positions.begin(), node.ref_positions.end());
+            } else if (node.ref_pos >= 0) {
+                unitig.ref_positions.insert(node.ref_pos);
+            }
+        }
+        unitig.mean_depth = total_depth / path.size();
+        if (!unitig.ref_positions.empty()) {
+            unitig.ref_pos = *unitig.ref_positions.begin();
+        }
+        return unitig;
+    };
+
     // Find maximal non-branching paths
     for (size_t i = 0; i < num_nodes; ++i) {
         const auto& nd = nodes[i];
@@ -117,22 +144,7 @@ bool UnitigGraph::build(const DBG& source) {
             cur = next;
         }
 
-        // Create unitig
-        Unitig u;
-        u.id = unitigs_.size();
-        u.node_ids = path;
-
-        // Build sequence: first node's kmer + last char of each subsequent node's kmer
-        u.sequence = source.node(path[0]).kmer;
-        for (size_t j = 1; j < path.size(); ++j) {
-            const auto& km = source.node(path[j]).kmer;
-            u.sequence += km.back();
-        }
-
-        // Mean depth
-        double total = 0;
-        for (uint64_t nid : path) total += source.node(nid).depth;
-        u.mean_depth = total / path.size();
+        Unitig u = build_unitig_from_path(unitigs_.size(), path);
 
         // Map nodes to unitig
         for (uint64_t nid : path) {
@@ -161,15 +173,7 @@ bool UnitigGraph::build(const DBG& source) {
 
         if (path.empty()) continue;
 
-        Unitig u;
-        u.id = unitigs_.size();
-        u.node_ids = path;
-        u.sequence = source.node(path[0]).kmer;
-        for (size_t j = 1; j < path.size(); ++j)
-            u.sequence += source.node(path[j]).kmer.back();
-        double total = 0;
-        for (uint64_t nid : path) total += source.node(nid).depth;
-        u.mean_depth = total / path.size();
+        Unitig u = build_unitig_from_path(unitigs_.size(), path);
         for (uint64_t nid : path) node_to_unitig_[nid] = u.id;
         unitigs_.push_back(std::move(u));
     }
@@ -201,24 +205,6 @@ bool UnitigGraph::build(const DBG& source) {
             }
         }
     }
-
-    auto build_unitig_from_path = [&source](uint64_t unitig_id,
-                                            const std::vector<uint64_t>& path) {
-        Unitig unitig;
-        unitig.id = unitig_id;
-        unitig.node_ids = path;
-        unitig.sequence = source.node(path[0]).kmer;
-        for (size_t index = 1; index < path.size(); ++index) {
-            unitig.sequence += source.node(path[index]).kmer.back();
-        }
-
-        double total_depth = 0.0;
-        for (uint64_t node_id : path) {
-            total_depth += source.node(node_id).depth;
-        }
-        unitig.mean_depth = total_depth / path.size();
-        return unitig;
-    };
 
     std::vector<bool> merged_visited(unitigs_.size(), false);
     std::vector<Unitig> merged_unitigs;

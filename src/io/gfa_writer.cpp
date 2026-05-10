@@ -450,7 +450,9 @@ void write_unitig_gfa(const std::string& path, const UnitigGraph& ug) {
 
     for (const auto& u : ug.unitigs()) {
         out << "S\t" << u.id << "\t" << u.sequence
-            << "\tDP:f:" << u.mean_depth << '\n';
+            << "\tDP:f:" << u.mean_depth
+            << "\tRP:i:" << u.ref_pos
+            << "\tRPS:Z:" << ref_positions_tag(u.ref_positions) << '\n';
     }
 
     for (const auto& e : ug.edges()) {
@@ -473,7 +475,10 @@ void write_unitig_json(const std::string& path, const UnitigGraph& ug) {
         out << "    {\"id\": " << unitig.id
             << ", \"sequence\": \"" << json_escape(unitig.sequence) << "\""
             << ", \"mean_depth\": " << unitig.mean_depth
-            << ", \"node_ids\": [";
+            << ", \"ref_pos\": " << unitig.ref_pos
+            << ", \"ref_positions\": ";
+        write_ref_positions_json(out, unitig.ref_positions);
+        out << ", \"node_ids\": [";
         for (size_t node_index = 0; node_index < unitig.node_ids.size(); ++node_index) {
             out << unitig.node_ids[node_index];
             if (node_index + 1 != unitig.node_ids.size()) {

@@ -174,7 +174,7 @@ Thin orchestration layer for persisted debug outputs.
 - `write_dbg_json(path, graph)` — structured JSON snapshot from a `DBG`.
 - `write_unitig_gfa(path, unitig_graph)` — GFA1 output from a `UnitigGraph`.
 - `write_unitig_json(path, unitig_graph)` — structured JSON snapshot from a
-  `UnitigGraph`.
+  `UnitigGraph`, including aggregated unitig reference coordinates.
 - `write_flow_path_artifacts(config, paths)` — structured JSON artifact for
   ILP output paths.
 

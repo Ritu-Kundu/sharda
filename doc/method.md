@@ -219,6 +219,8 @@ Each retained unitig stores:
 - A consensus sequence (first node's k-mer plus the last character of each
   subsequent k-mer).
 - The mean depth (average node depth across the chain).
+- The leftmost stored coordinate (`ref_pos`) and the sorted union of all
+   source-node coordinates (`ref_positions`).
 
 Edges between unitigs are created wherever the source graph connects the last
 node of one unitig to the first node of another. Edge weights are summed.

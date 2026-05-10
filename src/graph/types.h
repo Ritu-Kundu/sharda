@@ -114,6 +114,8 @@ struct Unitig {
     uint64_t              id = 0;
     std::string           sequence;
     double                mean_depth = 0.0;
+    int32_t               ref_pos = -1;
+    std::set<int32_t>     ref_positions;
     std::vector<uint64_t> node_ids; // constituent node IDs
 };
 

@@ -205,7 +205,9 @@ This requires:
   `raw.json`, `clean.json`, `unitig.json`, `manifest.json`, `viewer.html`,
   `flow_paths.json` after ILP path extraction, and optionally
   `read_traces.json` and `locus_traces.json` when `--trace-read` or
-  `--trace-locus` are used. `flow_paths.json` is not written when
+  `--trace-locus` are used. `unitig.gfa` segment lines carry aggregated
+  coordinate tags (`RP`, `RPS`), and `unitig.json` includes per-unitig
+  `ref_pos` and `ref_positions` fields. `flow_paths.json` is not written when
   `--unitig-only` is used or when no ILP paths are extracted.
 - In parallel mode, per-region debug output is written to
   `<prefix>_debug/<region>/`.
@@ -229,7 +231,9 @@ Generate debug artifacts for a single-region run:
 
 This writes `/tmp/sharda_debug_demo_debug/` with both compatibility GFA files
 and structured JSON snapshots for the raw, cleaned, and unitig graphs, plus
-`flow_paths.json` after ILP extraction.
+`flow_paths.json` after ILP extraction. The unitig artifacts preserve the
+leftmost coordinate represented by each unitig and the full sorted set of
+member-node coordinates.
 
 Inspect the extracted ILP paths and their unitig composition from an existing
 debug bundle:

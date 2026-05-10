@@ -225,7 +225,10 @@ decomposition.
 
 This file shows only ordinary unitig graph edges as `L` lines. Haplotype edges
 are preserved in `unitig.json` as phasing constraints, but they are not drawn
-as GFA links.
+as GFA links. Segment `S` lines include aggregated coordinate tags:
+
+- `RP` for the leftmost reference position represented by the unitig
+- `RPS` for the sorted set of all reference positions contributed by member nodes
 
 ### `raw.json` and `clean.json`
 
@@ -243,6 +246,7 @@ Structured unitig snapshot with:
 
 - graph kind
 - unitig list
+- per-unitig coordinate fields (`ref_pos`, `ref_positions`)
 - edge list
 - haplotype-edge list
 
@@ -295,7 +299,7 @@ human-readable compatibility format.
 For DBG snapshots, segment records are written as:
 
 ```text
-S <node_id> <kmer_sequence> DP:f:<depth> BB:i:<0|1> RP:i:<ref_pos> TR:i:<tr_id>
+S <node_id> <kmer_sequence> DP:f:<depth> BB:i:<0|1> RP:i:<ref_pos> RPS:Z:<comma_positions> TR:i:<tr_id>
 ```
 
 Meaning of the tags:
@@ -303,6 +307,7 @@ Meaning of the tags:
 - `DP` — node depth
 - `BB` — backbone flag
 - `RP` — reference position for backbone nodes, `-1` for non-backbone nodes
+- `RPS` — sorted comma-separated local coordinates associated with the segment
 - `TR` — tandem-repeat ID, `-1` if none
 
 DBG link records are written as:
@@ -314,7 +319,9 @@ L <from> + <to> + <k-1>M RC:i:<weight>
 Unitig GFA uses the unitig sequence on segment lines and unitig-level edge
 weights on link lines. If a singleton unitig appears in `unitig.gfa`, it now
 has at least one ordinary unitig-edge connection elsewhere in the graph;
-haplotype-edge-only singletons are filtered out before emission.
+haplotype-edge-only singletons are filtered out before emission. Unitig segment
+records also carry `RP` for the minimum represented coordinate and `RPS` for
+the full sorted coordinate set aggregated across constituent nodes.
 
 ### DBG JSON format
 
@@ -356,6 +363,8 @@ haplotype-edge-only singletons are filtered out before emission.
       "id": 0,
       "sequence": "ACGT...",
       "mean_depth": 11.5,
+      "ref_pos": 0,
+      "ref_positions": [0, 1, 2, 3],
       "node_ids": [0, 1, 2, 3]
     }
   ],
