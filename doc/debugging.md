@@ -5,8 +5,8 @@ bundle written by debug mode, and how to inspect graph nodes and ILP path
 outputs from persisted artifacts.
 
 The current framework captures the raw DBG, the cleaned DBG, the compacted
-unitig graph, an additive SV-oriented unitig view when SV mode is active, and
-the extracted ILP flow paths when flow decomposition runs.
+unitig graph, an additive SV-oriented unitig view in the default mode and in
+`--sv-only`, and the extracted ILP flow paths when flow decomposition runs.
 
 ## Scope
 
@@ -208,7 +208,8 @@ locus_traces.json
 `flow_paths.json` is written only when flow decomposition runs and returns one
 or more paths. It is omitted in `--unitig-only` mode.
 
-`unitig.sv.gfa` and `unitig.sv.json` are written only when SV mode is active.
+`unitig.sv.gfa` and `unitig.sv.json` are written in the default mode and in
+`--sv-only`. They are omitted in `--hap-only`.
 
 ### `raw.gfa`
 
@@ -443,7 +444,8 @@ unitig debug view.
 
 ### VCF output format
 
-When SV mode runs, Sharda writes `<prefix>.sv.vcf`.
+In the default mode and in `--sv-only`, Sharda writes `<prefix>.sv.vcf`.
+`--hap-only` disables that output.
 
 The current caller emits sequence-resolved simple indels only. Each record
 includes `SVTYPE`, `END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`,

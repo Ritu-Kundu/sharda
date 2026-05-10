@@ -76,7 +76,7 @@ struct Args {
     int         k       = 121;
     int         threads = 1;
     int         padding = 1000;
-    sharda::ExecutionMode mode = sharda::ExecutionMode::Haplotype;
+    sharda::ExecutionMode mode = sharda::ExecutionMode::Both;
     std::string out_prefix = "sharda_out";
     bool        stop_after_unitig_graph = false;
     bool        debug  = false;
@@ -128,7 +128,7 @@ void usage(const char* prog) {
               << " -r <ref.fa> -b <reads.bam> -p <ploidy>\n"
               << "       [-R <targets.bed>] [-j threads] [-f padding]\n"
               << "       [-t <repeats.bed>]\n"
-              << "       [-k kmer_size] [-o out_prefix] [--unitig-only] [--sv-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
+              << "       [-k kmer_size] [-o out_prefix] [--unitig-only] [--sv-only | --hap-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
               << "       [--debug-dir <dir> --debug-node <name> [--debug-stage <stage>]]\n"
               << "       [--debug-dir <dir> --debug-read <name>] [--debug-dir <dir> --debug-locus <start:length>]\n"
               << "\n"
@@ -143,7 +143,8 @@ void usage(const char* prog) {
               << "  -k  Kmer size (default: 121)\n"
               << "  -o  Output prefix (default: sharda_out)\n"
               << "  --unitig-only  Stop after unitig graph construction; skip ILP and haplotype FASTA output\n"
-              << "  --sv-only      Skip haplotype assembly and emit SV-oriented outputs only\n"
+              << "  --sv-only      Disable haplotype assembly and keep only SV-oriented outputs\n"
+              << "  --hap-only     Disable SV calling and SV-oriented artifacts; keep haplotype outputs only\n"
               << "  -d  Debug logging\n"
               << "  --trace-read   Trace a named read through raw, clean, and unitig stages\n"
               << "  --trace-locus  Trace a local reference interval through raw, clean, and unitig stages\n"
@@ -311,6 +312,7 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-o" && i + 1 < argc) a.out_prefix = argv[++i];
         else if (arg == "--unitig-only") a.stop_after_unitig_graph = true;
         else if (arg == "--sv-only") a.mode = sharda::ExecutionMode::Sv;
+        else if (arg == "--hap-only") a.mode = sharda::ExecutionMode::Haplotype;
         else if (arg == "--trace-read" && i + 1 < argc) a.trace_reads.push_back(argv[++i]);
         else if (arg == "--trace-locus" && i + 1 < argc) {
             sharda::LocusTraceRequest request;

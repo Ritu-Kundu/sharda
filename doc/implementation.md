@@ -282,7 +282,7 @@ Runs up to 10 rounds of:
   backbone-backbone edges are exempt from low-weight pruning so unsupported
   reference structure remains available to the SV caller.
 
-3. Bubble popping is currently skipped. The cleaner logs
+1. Bubble popping is currently skipped. The cleaner logs
   `bubble_popping_skipped=true` in each iteration summary and does not call the
   older bubble-removal heuristic.
 
@@ -332,12 +332,14 @@ The initial SV caller is intentionally conservative.
 10. Collapses exact duplicate normalized calls, keeping the best-ranked
   representative.
 11. Applies one additional conservative overlap-collapse pass for deletions
-  only when two canonical calls:
-   - share chromosome, `SVTYPE`, and `SVLEN`
-   - overlap or touch in event coordinates
-   - retain the same anchor base in `ALT`
-   - share either `SRC_REF_POS` or `SNK_REF_POS`
-12. Reassigns output IDs after collapsing so the returned calls are emitted as
+  only when two canonical calls meet all of these conditions:
+
+- share chromosome, `SVTYPE`, and `SVLEN`
+- overlap or touch in event coordinates
+- retain the same anchor base in `ALT`
+- share either `SRC_REF_POS` or `SNK_REF_POS`
+
+1. Reassigns output IDs after collapsing so the returned calls are emitted as
   a compact `sv1`, `sv2`, ... sequence.
 
 The current implementation now emits one VCF record per qualifying canonical
@@ -415,20 +417,22 @@ In debug mode, the single-region and per-region whole-genome paths emit a
 persisted artifact bundle under `<out_prefix>_debug/` containing GFA snapshots,
 JSON snapshots, a manifest, and a lightweight static HTML viewer.
 
-`--sv-only` currently skips haplotype flow decomposition, preserves
-backbone-backbone edges during cleaning, emits additive `unitig.sv.gfa` /
-`unitig.sv.json` outputs, and writes `<out_prefix>.sv.vcf` with `SVTYPE`,
-`END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`, `SRC_REF_POS`, and
-`SNK_REF_POS` INFO fields. The source/sink fields expose the canonical
-backbone interval anchors used to derive each call.
+Default execution currently enables both haplotype and SV output paths. That
+preserves backbone-backbone edges during cleaning, emits additive
+`unitig.sv.gfa` / `unitig.sv.json` outputs, and writes `<out_prefix>.sv.vcf`
+with `SVTYPE`, `END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`,
+`SRC_REF_POS`, and `SNK_REF_POS` INFO fields. The source/sink fields expose
+the canonical backbone interval anchors used to derive each call. `--sv-only`
+keeps that SV path but skips haplotype flow decomposition, while `--hap-only`
+forces the old haplotype-only path and suppresses SV artifacts.
 
 In single-region mode without `-d`, `main.cpp` also writes:
 
 - `<out_prefix>.raw.gfa`
 - `<out_prefix>.clean.gfa`
 - `<out_prefix>.unitig.gfa`
-- `<out_prefix>.unitig.sv.gfa` and `<out_prefix>.unitig.sv.json` when SV mode
-  is active
+- `<out_prefix>.unitig.sv.gfa` and `<out_prefix>.unitig.sv.json` in the
+  default mode and in `--sv-only`
 
 When `--unitig-only` is used, the program stops after unitig graph
 construction and debug/unitig artifact emission. In that mode it does not call

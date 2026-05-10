@@ -14,11 +14,15 @@ IRR anchor-chaining path is never activated.
 Sharda currently has three execution modes over the same graph-construction
 pipeline:
 
-- **Default haplotype mode** — build the graph, compact to unitigs, run ILP
-  flow decomposition, and emit haplotype FASTA.
+- **Default combined mode** — build the graph, compact to unitigs, call
+   simple indels from the unitig graph, run ILP flow decomposition, and emit
+   both haplotype FASTA and SV outputs.
 - **SV-only mode** (`--sv-only`) — build the graph, compact to unitigs, call
-  simple indels from the unitig graph, and emit `<prefix>.sv.vcf` plus the
-  usual graph artifacts.
+   simple indels from the unitig graph, emit the SV outputs, and skip
+   haplotype flow decomposition.
+- **Haplotype-only mode** (`--hap-only`) — build the graph, compact to
+   unitigs, run ILP flow decomposition, and skip SV calling plus SV-oriented
+   unitig outputs.
 - **Unitig-only mode** (`--unitig-only`) — stop after unitig graph
   construction and artifact emission. This mode skips both haplotype flow
   decomposition and SV calling.
@@ -35,7 +39,8 @@ Sharda follows this pipeline for each target region:
    call simple indels from alternate unitig traversals and/or solve an ILP to
    decompose unitig coverage into haplotype paths.
 6. **Output** — emit the outputs selected by the mode: haplotype FASTA,
-   `<prefix>.sv.vcf`, graph artifacts, or only unitig/debug artifacts.
+   `<prefix>.sv.vcf`, SV-oriented unitig artifacts, graph artifacts, or only
+   unitig/debug artifacts.
 
 ---
 
@@ -256,13 +261,20 @@ SV mode reuses the cleaned unitig DAG instead of the ILP path model.
 
 ### Activation and outputs
 
-`--sv-only` activates SV-only execution. In this mode, Sharda:
+By default, Sharda emits both haplotype and SV outputs. `--sv-only` switches
+to SV-only execution, while `--hap-only` switches to haplotype-only
+execution. When SV output is enabled, Sharda:
 
 - preserves backbone-backbone edges during graph cleaning
 - still emits the standard single-region graph views
 - emits SV-oriented unitig views as `unitig.sv.gfa` and `unitig.sv.json`
 - writes `<prefix>.sv.vcf`
-- skips haplotype flow decomposition and does not write `<prefix>.haplotypes.fa`
+
+With `--sv-only`, Sharda also skips haplotype flow decomposition and does not
+write `<prefix>.haplotypes.fa`.
+
+With `--hap-only`, Sharda skips SV calling, does not write `<prefix>.sv.vcf`,
+and does not emit `unitig.sv.gfa` or `unitig.sv.json`.
 
 If `--unitig-only` is also present, Sharda stops after unitig graph
 construction and does not call SVs.

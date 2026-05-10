@@ -17,7 +17,7 @@ struct RegionParams {
     std::vector<TandemRepeat> trs; // TRs in local coordinates
     int         ploidy  = 2;
     int         k       = 121;
-    ExecutionMode mode = ExecutionMode::Haplotype;
+    ExecutionMode mode = ExecutionMode::Both;
     bool        stop_after_unitig_graph = false;
     bool        debug   = false;
     std::string debug_dir;    // if non-empty, write GFA files here
