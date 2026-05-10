@@ -1,11 +1,13 @@
 #include "io/gfa_writer.h"
 #include "io/debug_artifacts.h"
+#include "io/vcf_writer.h"
 #include "graph/dbg.h"
 #include "graph/unitig_graph.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <numeric>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 
@@ -74,6 +76,60 @@ std::string stage_gfa_path(const DebugArtifactsConfig& config,
 
 std::string flow_paths_json_path(const DebugArtifactsConfig& config) {
     return (fs::path(config.output_dir) / "flow_paths.json").string();
+}
+
+std::string unitig_support_color(const Unitig& unitig) {
+    switch (unitig.support_class()) {
+    case UnitigSupportClass::BackboneOnly:
+        return "#3B7A57";
+    case UnitigSupportClass::Mixed:
+        return "#C97B2B";
+    case UnitigSupportClass::ReadOnly:
+        return "#2D6A9F";
+    }
+    return "#2D6A9F";
+}
+
+std::string escape_vcf_field(const std::string& value) {
+    return value.empty() ? "." : value;
+}
+
+std::string format_vcf_float(double value) {
+    std::ostringstream out;
+    out << std::setprecision(6) << std::defaultfloat << value;
+    return out.str();
+}
+
+std::string build_vcf_info_field(const StructuralVariantCall& call) {
+    std::vector<std::string> info_fields = call.info_fields;
+
+    auto append_if_missing = [&info_fields](const std::string& prefix,
+                                            const std::string& value) {
+        for (const auto& field : info_fields) {
+            if (field.rfind(prefix, 0) == 0) {
+                return;
+            }
+        }
+        info_fields.push_back(prefix + value);
+    };
+
+    append_if_missing("SVTYPE=", call.sv_type.empty() ? "UNK" : call.sv_type);
+    append_if_missing("END=", std::to_string(call.end));
+    append_if_missing("SVLEN=", std::to_string(call.sv_len));
+    append_if_missing("SUPPORT=", format_vcf_float(call.support_score));
+
+    if (info_fields.empty()) {
+        return ".";
+    }
+
+    std::ostringstream out;
+    for (size_t index = 0; index < info_fields.size(); ++index) {
+        if (index > 0) {
+            out << ';';
+        }
+        out << info_fields[index];
+    }
+    return out.str();
 }
 
 struct StableNodeOrder {
@@ -461,6 +517,29 @@ void write_unitig_gfa(const std::string& path, const UnitigGraph& ug) {
     }
 }
 
+void write_sv_unitig_gfa(const std::string& path, const UnitigGraph& ug) {
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("Cannot open GFA: " + path);
+
+    out << "H\tVN:Z:1.0\n";
+
+    for (const auto& u : ug.unitigs()) {
+        out << "S\t" << u.id << "\t" << u.sequence
+            << "\tDP:f:" << u.mean_depth
+            << "\tRP:i:" << u.ref_pos
+            << "\tRPS:Z:" << ref_positions_tag(u.ref_positions)
+            << "\tSC:Z:" << unitig_support_class_name(u.support_class())
+            << "\tBN:i:" << u.backbone_node_count
+            << "\tRN:i:" << u.read_node_count
+            << "\tCL:z:" << unitig_support_color(u) << '\n';
+    }
+
+    for (const auto& e : ug.edges()) {
+        out << "L\t" << e.from << "\t+\t" << e.to << "\t+\t0M"
+            << "\tRC:i:" << e.weight << '\n';
+    }
+}
+
 void write_unitig_json(const std::string& path, const UnitigGraph& ug) {
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot open debug JSON: " + path);
@@ -486,6 +565,69 @@ void write_unitig_json(const std::string& path, const UnitigGraph& ug) {
             }
         }
         out << "]}";
+        out << (index + 1 == unitigs.size() ? "\n" : ",\n");
+    }
+
+    out << "  ],\n"
+        << "  \"edges\": [\n";
+
+    const auto& edges = ug.edges();
+    for (size_t index = 0; index < edges.size(); ++index) {
+        const auto& edge = edges[index];
+        out << "    {\"from\": " << edge.from
+            << ", \"to\": " << edge.to
+            << ", \"weight\": " << edge.weight
+            << "}";
+        out << (index + 1 == edges.size() ? "\n" : ",\n");
+    }
+
+    out << "  ],\n"
+        << "  \"haplotype_edges\": [\n";
+
+    const auto& hap_edges = ug.haplotype_edges();
+    for (size_t index = 0; index < hap_edges.size(); ++index) {
+        const auto& edge = hap_edges[index];
+        out << "    {\"from\": " << edge.from_node
+            << ", \"to\": " << edge.to_node
+            << ", \"weight\": " << edge.weight
+            << "}";
+        out << (index + 1 == hap_edges.size() ? "\n" : ",\n");
+    }
+
+    out << "  ]\n"
+        << "}\n";
+}
+
+void write_sv_unitig_json(const std::string& path, const UnitigGraph& ug) {
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("Cannot open debug JSON: " + path);
+
+    out << "{\n"
+        << "  \"graph_kind\": \"unitig_sv\",\n"
+        << "  \"unitigs\": [\n";
+
+    const auto& unitigs = ug.unitigs();
+    for (size_t index = 0; index < unitigs.size(); ++index) {
+        const auto& unitig = unitigs[index];
+        out << "    {\"id\": " << unitig.id
+            << ", \"sequence\": \"" << json_escape(unitig.sequence) << "\""
+            << ", \"mean_depth\": " << unitig.mean_depth
+            << ", \"ref_pos\": " << unitig.ref_pos
+            << ", \"ref_positions\": ";
+        write_ref_positions_json(out, unitig.ref_positions);
+        out << ", \"node_ids\": [";
+        for (size_t node_index = 0; node_index < unitig.node_ids.size(); ++node_index) {
+            out << unitig.node_ids[node_index];
+            if (node_index + 1 != unitig.node_ids.size()) {
+                out << ", ";
+            }
+        }
+        out << "]"
+            << ", \"support_class\": \"" << unitig_support_class_name(unitig.support_class()) << "\""
+            << ", \"backbone_node_count\": " << unitig.backbone_node_count
+            << ", \"read_node_count\": " << unitig.read_node_count
+            << ", \"color\": \"" << unitig_support_color(unitig) << "\""
+            << "}";
         out << (index + 1 == unitigs.size() ? "\n" : ",\n");
     }
 
@@ -695,6 +837,50 @@ void write_flow_path_artifacts(const DebugArtifactsConfig& config,
 
     ensure_debug_output_dir(config);
     write_flow_paths_json(flow_paths_json_path(config), paths);
+}
+
+void write_vcf(const std::string& path,
+               const std::vector<StructuralVariantCall>& calls,
+               const std::string& source) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("Cannot open VCF: " + path);
+    }
+
+    out << "##fileformat=VCFv4.3\n";
+    out << "##source=" << escape_vcf_field(source) << "\n";
+    out << "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">\n";
+    out << "##INFO=<ID=END,Number=1,Type=Integer,Description=\"1-based inclusive end position of the reference allele\">\n";
+    out << "##INFO=<ID=SVLEN,Number=1,Type=Integer,Description=\"ALT length minus REF length\">\n";
+    out << "##INFO=<ID=SUPPORT,Number=1,Type=Float,Description=\"Representative alternate-path support score (minimum mean depth across non-backbone unitigs)\">\n";
+    out << "##INFO=<ID=SRC_UID,Number=1,Type=Integer,Description=\"Source backbone unitig ID for the reference interval\">\n";
+    out << "##INFO=<ID=SNK_UID,Number=1,Type=Integer,Description=\"Sink backbone unitig ID for the reference interval\">\n";
+    out << "##INFO=<ID=SRC_REF_POS,Number=1,Type=Integer,Description=\"1-based reference anchor coordinate of the source backbone unitig\">\n";
+    out << "##INFO=<ID=SNK_REF_POS,Number=1,Type=Integer,Description=\"1-based reference anchor coordinate of the sink backbone unitig\">\n";
+    out << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
+
+    std::vector<StructuralVariantCall> sorted_calls = calls;
+    std::sort(sorted_calls.begin(), sorted_calls.end(),
+              [](const StructuralVariantCall& lhs, const StructuralVariantCall& rhs) {
+                  if (lhs.chrom != rhs.chrom) {
+                      return lhs.chrom < rhs.chrom;
+                  }
+                  if (lhs.pos != rhs.pos) {
+                      return lhs.pos < rhs.pos;
+                  }
+                  return lhs.end < rhs.end;
+              });
+
+    for (const auto& call : sorted_calls) {
+        out << escape_vcf_field(call.chrom) << '\t'
+            << std::max<int32_t>(1, call.pos + 1) << '\t'
+            << escape_vcf_field(call.id) << '\t'
+            << escape_vcf_field(call.ref) << '\t'
+            << escape_vcf_field(call.alt) << '\t'
+            << ".\t"
+            << escape_vcf_field(call.filter) << '\t'
+            << build_vcf_info_field(call) << '\n';
+    }
 }
 
 } // namespace sharda

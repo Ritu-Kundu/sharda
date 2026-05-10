@@ -49,9 +49,17 @@ ReadClassification { type, is_evidence, tr_id }
 Node             { id, kmer, ref_pos, ref_positions, is_backbone, depth }
 Edge             { from, to, weight }
 HaplotypeEdge    { from_node, to_node, weight }
-Unitig           { id, node_ids, sequence, mean_depth }
+Unitig           { id, node_ids, sequence, mean_depth,
+                   backbone_node_count, read_node_count }
 HaplotypePath    { unitig_ids, sequence, flow }
+StructuralVariantCall { chrom, pos, end, id, ref, alt, sv_type, sv_len,
+                        filter, info_fields }
 ```
+
+Additional enums model pipeline mode and unitig provenance:
+
+- `ExecutionMode` — `Haplotype`, `Sv`, or `Both`
+- `UnitigSupportClass` — `BackboneOnly`, `Mixed`, or `ReadOnly`
 
 `ref_pos` remains the primary scalar coordinate used by existing consumers.
 For backbone nodes it is the exact backbone position. For non-backbone nodes it
@@ -112,9 +120,15 @@ Key operations:
 7. Drops singleton unitigs with no ordinary unitig-edge incidence. Haplotype
   edges alone do not keep a singleton because they are not emitted in
   `unitig.gfa`.
+8. Records how many backbone-derived and read-only DBG nodes contributed to
+  each unitig so downstream SV serializers and callers can distinguish
+  backbone-only, mixed, and read-only paths.
 
 `UnitigGraph::detect_cycles()` runs iterative DFS with three-colour marking
 (white/gray/black).
+
+`UnitigGraph::k()` preserves the source DBG k-mer size so downstream path
+reconstruction can append unitig suffixes using a `k-1` overlap.
 
 ### `src/io/fasta_reader.h / fasta_reader.cpp` — FASTA I/O
 
@@ -168,6 +182,10 @@ Thin orchestration layer for persisted debug outputs.
   `flow_paths.json` for extracted ILP paths, including only the flow value and
   ordered unitig IDs for each path.
 
+SV-oriented unitig artifacts are currently written by the unitig-stage callers
+in `main.cpp` and `region_assembler.cpp` rather than via a separate manifest
+entry.
+
 ### `src/io/gfa_writer.h / gfa_writer.cpp`
 
 - `write_gfa(path, graph)` — GFA1 output from a `DBG`.
@@ -175,11 +193,24 @@ Thin orchestration layer for persisted debug outputs.
 - `write_unitig_gfa(path, unitig_graph)` — GFA1 output from a `UnitigGraph`.
 - `write_unitig_json(path, unitig_graph)` — structured JSON snapshot from a
   `UnitigGraph`, including aggregated unitig reference coordinates.
+- `write_sv_unitig_gfa(path, unitig_graph)` — additive SV-oriented GFA output
+  with support-class tags and color hints.
+- `write_sv_unitig_json(path, unitig_graph)` — additive SV-oriented JSON output
+  carrying support class and provenance counts.
+- `write_vcf(path, calls, source)` — writes a minimal VCF v4.3 file for the
+  current set of SV calls.
 - `write_flow_path_artifacts(config, paths)` — structured JSON artifact for
   ILP output paths.
 
 For DBG artifacts, serializer-visible node IDs are emitted in a stable order so
 repeated runs on the same input produce deterministic GFA and JSON node names.
+
+SV-oriented unitig GFA segment records currently add:
+
+- `SC` — support class (`backbone`, `mixed`, `read`)
+- `BN` — number of backbone nodes contributing to the unitig
+- `RN` — number of read-only nodes contributing to the unitig
+- `CL` — color hint intended for downstream graph viewers
 
 ### `src/assembly/read_classifier.h / read_classifier.cpp`
 
@@ -230,7 +261,7 @@ Internal helpers:
 
 ### `src/assembly/graph_cleaner.h / graph_cleaner.cpp`
 
-`clean_graph(graph, mean_read_length)`:
+`clean_graph(graph, mean_read_length, options)`:
 
 Runs up to 10 rounds of:
 
@@ -246,6 +277,10 @@ Runs up to 10 rounds of:
   `ref_positions` falls in range. Backbone-backbone edges are removed when
   `weight < 0.05 * local_avg`. Edges touching at least one non-backbone node
   instead use `weight < max(0.05 * local_avg, 0.25 * mean_backbone_depth(graph))`.
+
+  When `options.preserve_backbone_edges=true` (currently used in SV mode),
+  backbone-backbone edges are exempt from low-weight pruning so unsupported
+  reference structure remains available to the SV caller.
 
 3. Bubble popping is currently skipped. The cleaner logs
   `bubble_popping_skipped=true` in each iteration summary and does not call the
@@ -271,21 +306,79 @@ early if a round produces no changes.
 6. Fallback on solver failure: equal flow distribution across first
    `max_paths` paths.
 
+### `src/assembly/sv_caller.h` and current implementation in `region_assembler.cpp`
+
+The initial SV caller is intentionally conservative.
+
+`call_structural_variants(unitig_graph, chrom, coord_offset)`:
+
+1. Computes in-degree and out-degree on the unitig DAG.
+2. Chooses candidate source unitigs that are backbone-only and branch to more
+  than one successor.
+3. Enumerates alternate traversals starting from each candidate source and
+  stops each traversal at the first downstream backbone unitig where that path
+  rejoins the backbone.
+4. Enumerates all source-to-sink unitig paths within that minimal canonical
+  interval.
+5. Requires exactly one all-backbone path to serve as the reference path.
+6. Treats the canonical alternate traversal as an SV candidate when it contains
+  at least one non-backbone interior unitig.
+7. Reconstructs reference and alternate sequences using the stored `k-1`
+  overlap between adjacent unitigs.
+8. Trims shared prefix and suffix sequence and emits a call only when the
+  difference reduces to a simple insertion or deletion.
+9. Assigns a per-call support score equal to the minimum `mean_depth` across
+  the non-backbone unitigs on the representative alternate traversal.
+10. Collapses exact duplicate normalized calls, keeping the best-ranked
+  representative.
+11. Applies one additional conservative overlap-collapse pass for deletions
+  only when two canonical calls:
+   - share chromosome, `SVTYPE`, and `SVLEN`
+   - overlap or touch in event coordinates
+   - retain the same anchor base in `ALT`
+   - share either `SRC_REF_POS` or `SNK_REF_POS`
+12. Reassigns output IDs after collapsing so the returned calls are emitted as
+  a compact `sv1`, `sv2`, ... sequence.
+
+The current implementation now emits one VCF record per qualifying canonical
+alternate path. This removes the earlier explosion of wider transitive
+source/sink windows. Equivalent canonical calls that normalize to the same
+simple indel are collapsed, keeping the strongest supported representative
+traversal. Distinct overlapping canonical indels are still reported
+separately, except for a narrow additional collapse step for overlapping
+canonical deletions that share a source or sink boundary anchor and the same
+retained anchor base. The representative path's current ranking score is
+carried into the VCF as `SUPPORT`, defined as the minimum mean depth across the
+non-backbone unitigs on that traversal.
+
 ### `src/assembly/region_assembler.h / region_assembler.cpp`
 
 `assemble_region(params)` → `RegionResult`:
 
 A self-contained, thread-safe function that runs the full single-region
-pipeline:
+assembly pipeline and returns in-memory results for one region:
 
 1. Reads reference via `read_fasta` or `read_fasta_region`.
 2. Builds backbone.
 3. Iterates BAM read pairs, adding each to the graph.
 4. Cleans graph.
-5. Builds unitig graph; checks for cycles.
-6. Runs flow decomposition.
-7. Writes FASTA + optional debug artifacts.
-8. Adjusts output coordinates by adding the region's genomic offset.
+5. Writes raw/clean debug artifacts when requested.
+6. Builds unitig graph; checks for cycles.
+7. Writes unitig debug artifacts, plus `unitig.sv.gfa` / `unitig.sv.json`
+  when SV mode is active.
+8. If `stop_after_unitig_graph` is set, returns early after artifact emission.
+9. In SV mode, calls simple indels from alternate unitig paths against a unique
+  backbone-only reference path and stores them in `RegionResult::sv_calls`.
+10. Runs flow decomposition only when haplotype mode is enabled.
+11. Converts haplotype paths into `RegionResult::haplotypes`.
+
+`assemble_region()` does not write the final merged FASTA or VCF files. Those
+top-level outputs are written by `main.cpp` after single-region execution or
+after collecting all per-region `RegionResult` objects in whole-genome mode.
+
+For SV calls, `coord_offset` is threaded into `build_indel_call()` so returned
+VCF coordinates are already translated back to genomic coordinates before
+`main.cpp` writes them.
 
 `RegionParams` captures all inputs: reference path, BAM path, TRs, ploidy,
 k-mer size, output prefix, debug flag, debug artifact configuration, and
@@ -322,8 +415,27 @@ In debug mode, the single-region and per-region whole-genome paths emit a
 persisted artifact bundle under `<out_prefix>_debug/` containing GFA snapshots,
 JSON snapshots, a manifest, and a lightweight static HTML viewer.
 
+`--sv-only` currently skips haplotype flow decomposition, preserves
+backbone-backbone edges during cleaning, emits additive `unitig.sv.gfa` /
+`unitig.sv.json` outputs, and writes `<out_prefix>.sv.vcf` with `SVTYPE`,
+`END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`, `SRC_REF_POS`, and
+`SNK_REF_POS` INFO fields. The source/sink fields expose the canonical
+backbone interval anchors used to derive each call.
+
+In single-region mode without `-d`, `main.cpp` also writes:
+
+- `<out_prefix>.raw.gfa`
+- `<out_prefix>.clean.gfa`
+- `<out_prefix>.unitig.gfa`
+- `<out_prefix>.unitig.sv.gfa` and `<out_prefix>.unitig.sv.json` when SV mode
+  is active
+
+When `--unitig-only` is used, the program stops after unitig graph
+construction and debug/unitig artifact emission. In that mode it does not call
+SVs and does not write `<out_prefix>.sv.vcf`, even if `--sv-only` is also set.
+
 - **Single-region mode** (no `-R` flag): calls the pipeline directly with the
-  provided files.
+  provided files and writes final FASTA/VCF outputs from `main.cpp`.
 - **Whole-genome parallel mode** (`-R` flag):
   1. Reads target regions from the BED file.
   2. Reads the genome-wide TR BED.
@@ -332,7 +444,12 @@ JSON snapshots, a manifest, and a lightweight static HTML viewer.
      next unprocessed region (work-stealing pattern).
   5. Each thread calls `assemble_region()` for its claimed region after
      extracting the region BAM and reference subsequence.
-  6. Results are collected and merged into a single output FASTA.
+  6. Results are collected and merged into one output FASTA and/or one merged
+     SV VCF depending on the execution mode.
+
+In whole-genome mode, raw/clean/unitig artifacts are written only inside each
+per-region debug directory when `-d` is enabled; there is no non-debug
+per-region raw/clean GFA bundle on disk.
 
 In both modes, `-t` is optional. When omitted, `main.cpp` skips `read_bed()`
 and passes an empty TR list into backbone construction, read classification,

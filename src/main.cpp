@@ -16,6 +16,7 @@
 #include "io/debug_artifacts.h"
 #include "io/fasta_writer.h"
 #include "io/gfa_writer.h"
+#include "io/vcf_writer.h"
 #include "graph/types.h"
 #include "graph/dbg.h"
 #include "graph/backbone.h"
@@ -24,6 +25,7 @@
 #include "assembly/graph_cleaner.h"
 #include "assembly/flow_decomp.h"
 #include "assembly/region_assembler.h"
+#include "assembly/sv_caller.h"
 #include "util/debug_config.h"
 #include "util/debug_query.h"
 
@@ -74,6 +76,7 @@ struct Args {
     int         k       = 121;
     int         threads = 1;
     int         padding = 1000;
+    sharda::ExecutionMode mode = sharda::ExecutionMode::Haplotype;
     std::string out_prefix = "sharda_out";
     bool        stop_after_unitig_graph = false;
     bool        debug  = false;
@@ -125,7 +128,7 @@ void usage(const char* prog) {
               << " -r <ref.fa> -b <reads.bam> -p <ploidy>\n"
               << "       [-R <targets.bed>] [-j threads] [-f padding]\n"
               << "       [-t <repeats.bed>]\n"
-              << "       [-k kmer_size] [-o out_prefix] [--unitig-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
+              << "       [-k kmer_size] [-o out_prefix] [--unitig-only] [--sv-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
               << "       [--debug-dir <dir> --debug-node <name> [--debug-stage <stage>]]\n"
               << "       [--debug-dir <dir> --debug-read <name>] [--debug-dir <dir> --debug-locus <start:length>]\n"
               << "\n"
@@ -140,6 +143,7 @@ void usage(const char* prog) {
               << "  -k  Kmer size (default: 121)\n"
               << "  -o  Output prefix (default: sharda_out)\n"
               << "  --unitig-only  Stop after unitig graph construction; skip ILP and haplotype FASTA output\n"
+              << "  --sv-only      Skip haplotype assembly and emit SV-oriented outputs only\n"
               << "  -d  Debug logging\n"
               << "  --trace-read   Trace a named read through raw, clean, and unitig stages\n"
               << "  --trace-locus  Trace a local reference interval through raw, clean, and unitig stages\n"
@@ -306,6 +310,7 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-f" && i + 1 < argc) a.padding = std::stoi(argv[++i]);
         else if (arg == "-o" && i + 1 < argc) a.out_prefix = argv[++i];
         else if (arg == "--unitig-only") a.stop_after_unitig_graph = true;
+        else if (arg == "--sv-only") a.mode = sharda::ExecutionMode::Sv;
         else if (arg == "--trace-read" && i + 1 < argc) a.trace_reads.push_back(argv[++i]);
         else if (arg == "--trace-locus" && i + 1 < argc) {
             sharda::LocusTraceRequest request;
@@ -380,6 +385,13 @@ Args parse_args(int argc, char* argv[]) {
     return a;
 }
 
+void write_sv_output(const std::string& out_prefix,
+                     const std::vector<sharda::StructuralVariantCall>& sv_calls) {
+    std::string out_vcf = out_prefix + ".sv.vcf";
+    sharda::write_vcf(out_vcf, sv_calls, "sharda");
+    spdlog::info("SV output: {} ({} records)", out_vcf, sv_calls.size());
+}
+
 /// Run the single-region pipeline (original behavior).
 int run_single_region(const Args& args) {
     // ── 1. Read inputs ──────────────────────────────────────────────
@@ -446,7 +458,9 @@ int run_single_region(const Args& args) {
     spdlog::info("Cleaning graph");
     int mean_read_len = 150;
     StageTimer clean_timer("clean graph");
-    sharda::clean_graph(graph, mean_read_len);
+    sharda::GraphCleaningOptions cleaning_options;
+    cleaning_options.preserve_backbone_edges = sharda::execution_mode_runs_sv(args.mode);
+    sharda::clean_graph(graph, mean_read_len, cleaning_options);
     clean_timer.finish();
 
     if (debug_artifacts.should_write()) {
@@ -479,15 +493,38 @@ int run_single_region(const Args& args) {
 
     if (debug_artifacts.should_write()) {
         sharda::write_unitig_debug_artifacts(debug_artifacts, "unitig", ug);
+        if (sharda::execution_mode_runs_sv(args.mode)) {
+            sharda::write_sv_unitig_gfa((fs::path(debug_artifacts.output_dir) / "unitig.sv.gfa").string(), ug);
+            sharda::write_sv_unitig_json((fs::path(debug_artifacts.output_dir) / "unitig.sv.json").string(), ug);
+        }
         spdlog::info("Unitig graph debug artifacts: {}", debug_artifacts.output_dir);
     } else {
         std::string unitig_gfa = args.out_prefix + ".unitig.gfa";
         sharda::write_unitig_gfa(unitig_gfa, ug);
         spdlog::info("Unitig graph GFA: {}", unitig_gfa);
+        if (sharda::execution_mode_runs_sv(args.mode)) {
+            std::string sv_unitig_gfa = args.out_prefix + ".unitig.sv.gfa";
+            std::string sv_unitig_json = args.out_prefix + ".unitig.sv.json";
+            sharda::write_sv_unitig_gfa(sv_unitig_gfa, ug);
+            sharda::write_sv_unitig_json(sv_unitig_json, ug);
+            spdlog::info("SV unitig outputs: {}, {}", sv_unitig_gfa, sv_unitig_json);
+        }
+    }
+
+    std::vector<sharda::StructuralVariantCall> sv_calls;
+    if (sharda::execution_mode_runs_sv(args.mode)) {
+        sv_calls = sharda::call_structural_variants(ug, ref_name, 0);
     }
 
     if (args.stop_after_unitig_graph) {
         spdlog::info("Stopping after unitig graph construction (--unitig-only)");
+        total_timer.finish();
+        return 0;
+    }
+
+    if (!sharda::execution_mode_runs_haplotype(args.mode)) {
+        spdlog::info("Skipping haplotype flow decomposition in SV-only mode");
+        write_sv_output(args.out_prefix, sv_calls);
         total_timer.finish();
         return 0;
     }
@@ -528,6 +565,9 @@ int run_single_region(const Args& args) {
     std::string out_fasta = args.out_prefix + ".haplotypes.fa";
     sharda::write_fasta(out_fasta, fasta_entries);
     spdlog::info("Output: {}", out_fasta);
+    if (sharda::execution_mode_runs_sv(args.mode)) {
+        write_sv_output(args.out_prefix, sv_calls);
+    }
     total_timer.finish();
     return 0;
 }
@@ -609,6 +649,7 @@ int run_whole_genome(const Args& args) {
                 params.trs          = std::move(local_trs);
                 params.ploidy       = args.ploidy;
                 params.k            = args.k;
+                params.mode         = args.mode;
                 params.stop_after_unitig_graph = args.stop_after_unitig_graph;
                 params.debug        = args.debug;
                 params.debug_artifacts = make_debug_artifacts_config(args);
@@ -656,17 +697,24 @@ int run_whole_genome(const Args& args) {
 
     // ── 4. Collect and write results ────────────────────────────────
     std::vector<std::pair<std::string, std::string>> merged;
+    std::vector<sharda::StructuralVariantCall> merged_sv_calls;
     int succeeded = 0, failed = 0;
 
     for (const auto& res : results) {
         if (res.success) {
             succeeded++;
-            for (const auto& hap : res.haplotypes) {
-                merged.push_back(hap);
+            if (sharda::execution_mode_runs_haplotype(args.mode)) {
+                for (const auto& hap : res.haplotypes) {
+                    merged.push_back(hap);
+                }
             }
+            merged_sv_calls.insert(merged_sv_calls.end(),
+                                   res.sv_calls.begin(),
+                                   res.sv_calls.end());
 
             // Per-region FASTA in debug folder
-            if (args.debug && !debug_base.empty()) {
+            if (args.debug && !debug_base.empty()
+                && sharda::execution_mode_runs_haplotype(args.mode)) {
                 std::string safe_name = res.region_name;
                 std::replace(safe_name.begin(), safe_name.end(), ':', '_');
                 std::string region_fasta =
@@ -691,9 +739,17 @@ int run_whole_genome(const Args& args) {
         return 0;
     }
 
-    if (merged.empty()) {
+    if (sharda::execution_mode_runs_sv(args.mode)) {
+        write_sv_output(args.out_prefix, merged_sv_calls);
+    }
+
+    if (sharda::execution_mode_runs_haplotype(args.mode) && merged.empty()) {
         spdlog::error("No haplotypes assembled across any region");
         return 1;
+    }
+
+    if (!sharda::execution_mode_runs_haplotype(args.mode)) {
+        return succeeded == 0 ? 1 : 0;
     }
 
     std::string out_fasta = args.out_prefix + ".haplotypes.fa";

@@ -1,3 +1,4 @@
+#include "io/vcf_writer.h"
 #include <gtest/gtest.h>
 #include "util/kmer.h"
 #include "io/fasta_reader.h"
@@ -15,6 +16,7 @@
 #include "assembly/read_adder.h"
 #include "assembly/graph_cleaner.h"
 #include "assembly/flow_decomp.h"
+#include "assembly/sv_caller.h"
 
 #include <fstream>
 #include <filesystem>
@@ -399,6 +401,36 @@ TEST(GraphCleaner, PrunesEdgesUsingRegionalMeanDepthFloor) {
     EXPECT_TRUE(has_edge(graph, r1, b2));
 }
 
+TEST(GraphCleaner, PreservesBackboneEdgesInSvMode) {
+    sharda::DBG default_graph(3);
+    auto default_b0 = default_graph.add_backbone_node("AAA", 0, -1);
+    auto default_b1 = default_graph.add_backbone_node("AAT", 1, -1);
+    auto default_b2 = default_graph.add_backbone_node("ATC", 2, -1);
+    auto default_b3 = default_graph.add_backbone_node("TCG", 3, -1);
+
+    add_edge_copies(default_graph, default_b0, default_b1, 100);
+    default_graph.add_edge(default_b1, default_b2);
+    add_edge_copies(default_graph, default_b2, default_b3, 100);
+
+    sharda::clean_graph(default_graph, 150);
+    EXPECT_FALSE(has_edge(default_graph, default_b1, default_b2));
+
+    sharda::DBG sv_graph(3);
+    auto sv_b0 = sv_graph.add_backbone_node("AAA", 0, -1);
+    auto sv_b1 = sv_graph.add_backbone_node("AAT", 1, -1);
+    auto sv_b2 = sv_graph.add_backbone_node("ATC", 2, -1);
+    auto sv_b3 = sv_graph.add_backbone_node("TCG", 3, -1);
+
+    add_edge_copies(sv_graph, sv_b0, sv_b1, 100);
+    sv_graph.add_edge(sv_b1, sv_b2);
+    add_edge_copies(sv_graph, sv_b2, sv_b3, 100);
+
+    sharda::GraphCleaningOptions options;
+    options.preserve_backbone_edges = true;
+    sharda::clean_graph(sv_graph, 150, options);
+    EXPECT_TRUE(has_edge(sv_graph, sv_b1, sv_b2));
+}
+
 TEST_F(TempFileTest, DebugArtifactsUseStableNodeIds) {
     sharda::DBG graph_a(3);
     auto a0 = graph_a.add_backbone_node("AAA", 0, -1);
@@ -433,6 +465,262 @@ TEST_F(TempFileTest, DebugArtifactsUseStableNodeIds) {
 
     EXPECT_EQ(read_text_file(gfa_a), read_text_file(gfa_b));
     EXPECT_EQ(read_text_file(json_a), read_text_file(json_b));
+}
+
+TEST_F(TempFileTest, SvUnitigArtifactsAnnotateSupportClass) {
+    sharda::DBG graph(3);
+
+    auto mixed_backbone = graph.add_backbone_node("AAA", 0, -1);
+    auto mixed_read = graph.add_read_node("AAT");
+    graph.add_node_ref_pos(mixed_read, 1);
+    graph.add_edge(mixed_backbone, mixed_read);
+
+    auto pure_backbone_a = graph.add_backbone_node("ACC", 3, -1);
+    auto pure_backbone_b = graph.add_backbone_node("CCG", 4, -1);
+    graph.add_edge(pure_backbone_a, pure_backbone_b);
+
+    auto read_only_a = graph.add_read_node("TTT");
+    auto read_only_b = graph.add_read_node("TTC");
+    graph.add_node_ref_pos(read_only_a, 6);
+    graph.add_node_ref_pos(read_only_b, 7);
+    graph.add_edge(read_only_a, read_only_b);
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    std::string gfa_path = tmp_path("unitig.sv.gfa");
+    std::string json_path = tmp_path("unitig.sv.json");
+    sharda::write_sv_unitig_gfa(gfa_path, ug);
+    sharda::write_sv_unitig_json(json_path, ug);
+
+    const std::string gfa = read_text_file(gfa_path);
+    const std::string json = read_text_file(json_path);
+
+    EXPECT_NE(gfa.find("SC:Z:backbone"), std::string::npos);
+    EXPECT_NE(gfa.find("SC:Z:mixed"), std::string::npos);
+    EXPECT_NE(gfa.find("SC:Z:read"), std::string::npos);
+    EXPECT_NE(gfa.find("CL:z:#3B7A57"), std::string::npos);
+    EXPECT_NE(json.find("\"graph_kind\": \"unitig_sv\""), std::string::npos);
+    EXPECT_NE(json.find("\"support_class\": \"backbone\""), std::string::npos);
+    EXPECT_NE(json.find("\"support_class\": \"mixed\""), std::string::npos);
+    EXPECT_NE(json.find("\"support_class\": \"read\""), std::string::npos);
+}
+
+TEST(SvCaller, CallsMultipleParallelInsertionPathsAgainstBackbonePath) {
+    sharda::DBG graph(3);
+
+    auto source = graph.add_backbone_node("AAA", 0, -1);
+    auto ref1 = graph.add_backbone_node("AAC", 1, -1);
+    auto ref2 = graph.add_backbone_node("ACC", 2, -1);
+    auto sink = graph.add_backbone_node("CCC", 3, -1);
+
+    graph.add_edge(source, ref1);
+    graph.add_edge(ref1, ref2);
+    graph.add_edge(ref2, sink);
+
+    auto alt1_a = graph.add_read_node("AAG");
+    auto alt1_b = graph.add_read_node("AGC");
+    auto alt1_c = graph.add_read_node("GCC");
+    graph.add_node_ref_pos(alt1_a, 1);
+    graph.add_node_ref_pos(alt1_b, 2);
+    graph.add_node_ref_pos(alt1_c, 3);
+    graph.add_edge(source, alt1_a);
+    graph.add_edge(alt1_a, alt1_b);
+    graph.add_edge(alt1_b, alt1_c);
+    graph.add_edge(alt1_c, sink);
+
+    auto alt2_a = graph.add_read_node("AAT");
+    auto alt2_b = graph.add_read_node("ATC");
+    auto alt2_c = graph.add_read_node("TCC");
+    graph.add_node_ref_pos(alt2_a, 1);
+    graph.add_node_ref_pos(alt2_b, 2);
+    graph.add_node_ref_pos(alt2_c, 3);
+    graph.add_edge(source, alt2_a);
+    graph.add_edge(alt2_a, alt2_b);
+    graph.add_edge(alt2_b, alt2_c);
+    graph.add_edge(alt2_c, sink);
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    auto calls = sharda::call_structural_variants(ug, "chrTest", 100);
+    ASSERT_EQ(calls.size(), 2u);
+
+    std::sort(calls.begin(), calls.end(), [](const sharda::StructuralVariantCall& lhs,
+                                             const sharda::StructuralVariantCall& rhs) {
+        return lhs.alt < rhs.alt;
+    });
+
+    EXPECT_EQ(calls[0].chrom, "chrTest");
+    EXPECT_EQ(calls[0].sv_type, "INS");
+    EXPECT_EQ(calls[0].ref, "A");
+    EXPECT_EQ(calls[0].alt, "AG");
+    EXPECT_EQ(calls[0].pos, 102);
+    EXPECT_EQ(calls[0].end, 103);
+    EXPECT_EQ(calls[0].sv_len, 1);
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SRC_REF_POS=101"),
+              calls[0].info_fields.end());
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SNK_REF_POS=104"),
+              calls[0].info_fields.end());
+
+    EXPECT_EQ(calls[1].sv_type, "INS");
+    EXPECT_EQ(calls[1].ref, "A");
+    EXPECT_EQ(calls[1].alt, "AT");
+    EXPECT_EQ(calls[1].pos, 102);
+    EXPECT_EQ(calls[1].end, 103);
+    EXPECT_EQ(calls[1].sv_len, 1);
+}
+
+TEST(SvCaller, CallsDeletionPathAgainstBackbonePath) {
+    sharda::DBG graph(3);
+
+    auto source = graph.add_backbone_node("AAA", 0, -1);
+    auto ref1 = graph.add_backbone_node("AAC", 1, -1);
+    auto ref2 = graph.add_backbone_node("ACC", 2, -1);
+    auto sink = graph.add_backbone_node("CCC", 3, -1);
+
+    graph.add_edge(source, ref1);
+    graph.add_edge(ref1, ref2);
+    graph.add_edge(ref2, sink);
+
+    auto alt = graph.add_read_node("ACC");
+    graph.add_node_ref_pos(alt, 2);
+    graph.add_edge(source, alt);
+    graph.add_edge(alt, sink);
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    auto calls = sharda::call_structural_variants(ug, "chrDel", 200);
+    ASSERT_EQ(calls.size(), 1u);
+
+    EXPECT_EQ(calls[0].chrom, "chrDel");
+    EXPECT_EQ(calls[0].sv_type, "DEL");
+    EXPECT_EQ(calls[0].ref, "CC");
+    EXPECT_EQ(calls[0].alt, "C");
+    EXPECT_EQ(calls[0].pos, 204);
+    EXPECT_EQ(calls[0].end, 206);
+    EXPECT_EQ(calls[0].sv_len, -1);
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SRC_REF_POS=201"),
+              calls[0].info_fields.end());
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SNK_REF_POS=204"),
+              calls[0].info_fields.end());
+}
+
+TEST(SvCaller, UsesNearestBackboneRejoinForCanonicalInterval) {
+    sharda::DBG graph(3);
+
+    auto source = graph.add_backbone_node("AAA", 0, -1);
+    auto ref1 = graph.add_backbone_node("AAC", 1, -1);
+    auto ref2 = graph.add_backbone_node("ACC", 2, -1);
+    auto sink = graph.add_backbone_node("CCC", 3, -1);
+    auto tail = graph.add_backbone_node("CCG", 4, -1);
+
+    graph.add_edge(source, ref1);
+    graph.add_edge(ref1, ref2);
+    graph.add_edge(ref2, sink);
+    graph.add_edge(sink, tail);
+
+    auto alt = graph.add_read_node("ACC");
+    graph.add_node_ref_pos(alt, 2);
+    graph.add_edge(source, alt);
+    graph.add_edge(alt, sink);
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    auto calls = sharda::call_structural_variants(ug, "chrNearest", 200);
+    ASSERT_EQ(calls.size(), 1u);
+
+    EXPECT_EQ(calls[0].sv_type, "DEL");
+    EXPECT_EQ(calls[0].pos, 204);
+    EXPECT_EQ(calls[0].end, 206);
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SRC_REF_POS=201"),
+              calls[0].info_fields.end());
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SNK_REF_POS=204"),
+              calls[0].info_fields.end());
+    EXPECT_EQ(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "SNK_REF_POS=205"),
+              calls[0].info_fields.end());
+}
+
+TEST(SvCaller, CollapsesEquivalentCanonicalCallsBySupport) {
+    sharda::StructuralVariantCall weaker;
+    weaker.chrom = "chrCollapse";
+    weaker.pos = 451;
+    weaker.end = 453;
+    weaker.ref = "TT";
+    weaker.alt = "T";
+    weaker.sv_type = "DEL";
+    weaker.sv_len = -1;
+    weaker.support_score = 3.0;
+    weaker.info_fields = {"SRC_UID=0", "SNK_UID=4", "SRC_REF_POS=288", "SNK_REF_POS=453"};
+
+    sharda::StructuralVariantCall stronger = weaker;
+    stronger.support_score = 9.0;
+    stronger.info_fields = {"SRC_UID=2", "SNK_UID=4", "SRC_REF_POS=288", "SNK_REF_POS=453"};
+
+    auto collapsed = sharda::collapse_structural_variant_calls({weaker, stronger});
+    ASSERT_EQ(collapsed.size(), 1u);
+    EXPECT_EQ(collapsed[0].id, "sv1");
+    EXPECT_EQ(collapsed[0].support_score, 9.0);
+    EXPECT_NE(std::find(collapsed[0].info_fields.begin(), collapsed[0].info_fields.end(), "SRC_UID=2"),
+              collapsed[0].info_fields.end());
+    EXPECT_EQ(std::find(collapsed[0].info_fields.begin(), collapsed[0].info_fields.end(), "SRC_UID=0"),
+              collapsed[0].info_fields.end());
+}
+
+TEST(SvCaller, CollapsesOverlappingCanonicalCallsWithSharedBoundary) {
+    sharda::StructuralVariantCall earlier;
+    earlier.chrom = "chrOverlap";
+    earlier.pos = 451;
+    earlier.end = 453;
+    earlier.ref = "TT";
+    earlier.alt = "T";
+    earlier.sv_type = "DEL";
+    earlier.sv_len = -1;
+    earlier.support_score = 4.0;
+    earlier.info_fields = {"SRC_UID=2", "SNK_UID=4", "SRC_REF_POS=288", "SNK_REF_POS=453"};
+
+    sharda::StructuralVariantCall later;
+    later.chrom = "chrOverlap";
+    later.pos = 452;
+    later.end = 454;
+    later.ref = "TG";
+    later.alt = "T";
+    later.sv_type = "DEL";
+    later.sv_len = -1;
+    later.support_score = 6.5;
+    later.info_fields = {"SRC_UID=3", "SNK_UID=4", "SRC_REF_POS=409", "SNK_REF_POS=453"};
+
+    auto collapsed = sharda::collapse_structural_variant_calls({earlier, later});
+    ASSERT_EQ(collapsed.size(), 1u);
+    EXPECT_EQ(collapsed[0].id, "sv1");
+    EXPECT_EQ(collapsed[0].pos, later.pos);
+    EXPECT_EQ(collapsed[0].end, later.end);
+    EXPECT_EQ(collapsed[0].support_score, later.support_score);
+    EXPECT_NE(std::find(collapsed[0].info_fields.begin(), collapsed[0].info_fields.end(), "SNK_REF_POS=453"),
+              collapsed[0].info_fields.end());
+}
+
+TEST_F(TempFileTest, VcfWriterIncludesSupportInfo) {
+    sharda::StructuralVariantCall call;
+    call.chrom = "chrSupport";
+    call.pos = 10;
+    call.end = 12;
+    call.id = "sv1";
+    call.ref = "TT";
+    call.alt = "T";
+    call.sv_type = "DEL";
+    call.sv_len = -1;
+    call.support_score = 4.25;
+    call.info_fields = {"SRC_UID=1", "SNK_UID=2", "SRC_REF_POS=11", "SNK_REF_POS=13"};
+
+    const std::string path = tmp_path("calls.vcf");
+    sharda::write_vcf(path, {call}, "sharda-test");
+
+    const std::string vcf = read_text_file(path);
+    EXPECT_NE(vcf.find("##INFO=<ID=SUPPORT,Number=1,Type=Float"), std::string::npos);
+    EXPECT_NE(vcf.find("SUPPORT=4.25"), std::string::npos);
 }
 
 TEST(ReadAdder, OrrChoosesClosestMatchingBackboneNodes) {

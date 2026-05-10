@@ -7,6 +7,49 @@
 
 namespace sharda {
 
+enum class ExecutionMode : uint8_t {
+    Haplotype,
+    Sv,
+    Both,
+};
+
+enum class UnitigSupportClass : uint8_t {
+    BackboneOnly,
+    Mixed,
+    ReadOnly,
+};
+
+inline bool execution_mode_runs_haplotype(ExecutionMode mode) {
+    return mode == ExecutionMode::Haplotype || mode == ExecutionMode::Both;
+}
+
+inline bool execution_mode_runs_sv(ExecutionMode mode) {
+    return mode == ExecutionMode::Sv || mode == ExecutionMode::Both;
+}
+
+inline UnitigSupportClass classify_unitig_support(size_t backbone_node_count,
+                                                 size_t read_node_count) {
+    if (backbone_node_count > 0 && read_node_count == 0) {
+        return UnitigSupportClass::BackboneOnly;
+    }
+    if (backbone_node_count > 0) {
+        return UnitigSupportClass::Mixed;
+    }
+    return UnitigSupportClass::ReadOnly;
+}
+
+inline const char* unitig_support_class_name(UnitigSupportClass support_class) {
+    switch (support_class) {
+    case UnitigSupportClass::BackboneOnly:
+        return "backbone";
+    case UnitigSupportClass::Mixed:
+        return "mixed";
+    case UnitigSupportClass::ReadOnly:
+        return "read";
+    }
+    return "read";
+}
+
 // ── Genomic region ──────────────────────────────────────────────────────────
 struct TargetRegion {
     std::string chrom;
@@ -117,6 +160,26 @@ struct Unitig {
     int32_t               ref_pos = -1;
     std::set<int32_t>     ref_positions;
     std::vector<uint64_t> node_ids; // constituent node IDs
+    size_t                backbone_node_count = 0;
+    size_t                read_node_count = 0;
+
+    UnitigSupportClass support_class() const {
+        return classify_unitig_support(backbone_node_count, read_node_count);
+    }
+};
+
+struct StructuralVariantCall {
+    std::string chrom;
+    int32_t pos = 0;
+    int32_t end = 0;
+    std::string id;
+    std::string ref;
+    std::string alt;
+    std::string sv_type;
+    int32_t sv_len = 0;
+    std::string filter = "PASS";
+    double support_score = 0.0;
+    std::vector<std::string> info_fields;
 };
 
 } // namespace sharda

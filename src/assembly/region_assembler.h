@@ -17,6 +17,7 @@ struct RegionParams {
     std::vector<TandemRepeat> trs; // TRs in local coordinates
     int         ploidy  = 2;
     int         k       = 121;
+    ExecutionMode mode = ExecutionMode::Haplotype;
     bool        stop_after_unitig_graph = false;
     bool        debug   = false;
     std::string debug_dir;    // if non-empty, write GFA files here
@@ -27,6 +28,7 @@ struct RegionParams {
 struct RegionResult {
     std::string region_name;
     std::vector<std::pair<std::string, std::string>> haplotypes; // (name, sequence)
+    std::vector<StructuralVariantCall> sv_calls;
     bool        success = false;
     std::string error;
 };

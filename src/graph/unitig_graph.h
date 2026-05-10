@@ -13,6 +13,8 @@ public:
     /// Build from a cleaned DBG. Returns false if cycles are detected.
     bool build(const DBG& source);
 
+    int k() const { return k_; }
+
     const std::vector<Unitig>& unitigs() const { return unitigs_; }
     const std::vector<Edge>& edges() const { return edges_; }
     const std::vector<HaplotypeEdge>& haplotype_edges() const { return hap_edges_; }
@@ -33,6 +35,7 @@ private:
     std::vector<HaplotypeEdge> hap_edges_;
     std::unordered_map<uint64_t, uint64_t> node_to_unitig_;
     bool has_cycles_ = false;
+    int k_ = 0;
 
     bool detect_cycles() const;
 };

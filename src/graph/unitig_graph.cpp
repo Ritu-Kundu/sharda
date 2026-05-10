@@ -52,6 +52,7 @@ bool UnitigGraph::build(const DBG& source) {
     edges_.clear();
     hap_edges_.clear();
     node_to_unitig_.clear();
+    k_ = source.k();
 
     const auto& nodes = source.nodes();
     size_t num_nodes = nodes.size();
@@ -75,6 +76,11 @@ bool UnitigGraph::build(const DBG& source) {
         for (uint64_t node_id : path) {
             const auto& node = source.node(node_id);
             total_depth += node.depth;
+            if (node.is_backbone) {
+                unitig.backbone_node_count++;
+            } else {
+                unitig.read_node_count++;
+            }
             if (!node.ref_positions.empty()) {
                 unitig.ref_positions.insert(node.ref_positions.begin(), node.ref_positions.end());
             } else if (node.ref_pos >= 0) {

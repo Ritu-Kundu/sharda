@@ -328,10 +328,14 @@ int remove_tips(DBG& graph, int max_tip_len) {
 
 /// Prune low-weight edges (< 5% of local average).
 /// Returns number of edges removed.
-int prune_low_weight_edges(DBG& graph) {
+int prune_low_weight_edges(DBG& graph, GraphCleaningOptions options) {
     int removed = 0;
     for (size_t i = 0; i < graph.edges().size(); ++i) {
         const auto& e = graph.edges()[i];
+        const bool is_backbone_edge = graph.node(e.from).is_backbone && graph.node(e.to).is_backbone;
+        if (options.preserve_backbone_edges && is_backbone_edge) {
+            continue;
+        }
         const auto anchor_positions = collect_edge_positions(graph, e);
         double avg = local_avg_weight(graph, anchor_positions);
         const bool uses_non_backbone = !graph.node(e.from).is_backbone || !graph.node(e.to).is_backbone;
@@ -345,7 +349,9 @@ int prune_low_weight_edges(DBG& graph) {
 
 } // anonymous namespace
 
-void clean_graph(DBG& graph, int mean_read_length) {
+void clean_graph(DBG& graph,
+                 int mean_read_length,
+                 GraphCleaningOptions options) {
     spdlog::info("Graph cleaning started: {} nodes, {} edges",
                  graph.node_count(), graph.edge_count());
 
@@ -357,7 +363,7 @@ void clean_graph(DBG& graph, int mean_read_length) {
         size_t tip_edges_removed = edges_before_tips - edges_after_tips;
 
         size_t edges_before_low_wt = graph.edge_count();
-        int low_wt   = prune_low_weight_edges(graph);
+        int low_wt   = prune_low_weight_edges(graph, options);
         graph.rebuild_adjacency();
         size_t edges_after_low_wt = graph.edge_count();
         size_t low_wt_edges_removed = edges_before_low_wt - edges_after_low_wt;

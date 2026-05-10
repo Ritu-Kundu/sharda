@@ -5,7 +5,8 @@ bundle written by debug mode, and how to inspect graph nodes and ILP path
 outputs from persisted artifacts.
 
 The current framework captures the raw DBG, the cleaned DBG, the compacted
-unitig graph, and the extracted ILP flow paths when flow decomposition runs.
+unitig graph, an additive SV-oriented unitig view when SV mode is active, and
+the extracted ILP flow paths when flow decomposition runs.
 
 ## Scope
 
@@ -66,9 +67,12 @@ The simplest first pass is:
 1. open `raw.gfa` to inspect the initial graph after read addition
 2. open `clean.gfa` to compare the graph after tip pruning and low-weight edge pruning
 3. open `unitig.gfa` to inspect the compacted graph before flow decomposition
-4. open `raw.json`, `clean.json`, or `unitig.json` if you want structured
-  fields rather than GFA tags
-5. open `flow_paths.json` to inspect the ILP-selected paths, their flows, and
+4. in SV mode, open `unitig.sv.gfa` to inspect backbone, mixed, and read-only
+  unitigs with explicit support-class tags and color hints
+5. open `raw.json`, `clean.json`, `unitig.json`, or `unitig.sv.json` if you
+  want structured fields rather than GFA tags
+6. open `<prefix>.sv.vcf` to inspect the current simple indel calls
+7. open `flow_paths.json` to inspect the ILP-selected paths, their flows, and
   the ordered unitigs contributing to each extracted haplotype path
 
 ### 3. Look up a specific node
@@ -189,9 +193,11 @@ In single-region mode, `-d` produces the following files in
 raw.gfa
 clean.gfa
 unitig.gfa
+unitig.sv.gfa
 raw.json
 clean.json
 unitig.json
+unitig.sv.json
 manifest.json
 viewer.html
 flow_paths.json
@@ -201,6 +207,8 @@ locus_traces.json
 
 `flow_paths.json` is written only when flow decomposition runs and returns one
 or more paths. It is omitted in `--unitig-only` mode.
+
+`unitig.sv.gfa` and `unitig.sv.json` are written only when SV mode is active.
 
 ### `raw.gfa`
 
@@ -230,6 +238,18 @@ as GFA links. Segment `S` lines include aggregated coordinate tags:
 - `RP` for the leftmost reference position represented by the unitig
 - `RPS` for the sorted set of all reference positions contributed by member nodes
 
+### `unitig.sv.gfa`
+
+SV-oriented compacted unitig graph built from the same cleaned DBG.
+
+This file preserves the same graph topology as `unitig.gfa` but adds support
+classification tags for graph browsing:
+
+- `SC` — support class (`backbone`, `mixed`, `read`)
+- `BN` — number of backbone nodes in the unitig
+- `RN` — number of read-only nodes in the unitig
+- `CL` — a color hint for downstream viewers
+
 ### `raw.json` and `clean.json`
 
 Structured DBG snapshots with:
@@ -247,6 +267,18 @@ Structured unitig snapshot with:
 - graph kind
 - unitig list
 - per-unitig coordinate fields (`ref_pos`, `ref_positions`)
+- edge list
+- haplotype-edge list
+
+### `unitig.sv.json`
+
+Structured SV-oriented unitig snapshot with:
+
+- graph kind `unitig_sv`
+- unitig list
+- per-unitig support class
+- backbone and read-node provenance counts
+- color hint
 - edge list
 - haplotype-edge list
 
@@ -323,6 +355,10 @@ haplotype-edge-only singletons are filtered out before emission. Unitig segment
 records also carry `RP` for the minimum represented coordinate and `RPS` for
 the full sorted coordinate set aggregated across constituent nodes.
 
+`unitig.sv.gfa` adds `SC`, `BN`, `RN`, and `CL` on segment lines so backbone,
+mixed, and read-only unitigs can be distinguished without changing the default
+unitig debug view.
+
 ### DBG JSON format
 
 `raw.json` and `clean.json` currently use this shape:
@@ -376,6 +412,69 @@ the full sorted coordinate set aggregated across constituent nodes.
   ]
 }
 ```
+
+### SV-oriented unitig JSON format
+
+`unitig.sv.json` currently uses this shape:
+
+```json
+{
+  "graph_kind": "unitig_sv",
+  "unitigs": [
+    {
+      "id": 0,
+      "sequence": "ACGT...",
+      "mean_depth": 11.5,
+      "ref_pos": 0,
+      "ref_positions": [0, 1, 2, 3],
+      "node_ids": [0, 1, 2, 3],
+      "support_class": "backbone",
+      "backbone_node_count": 4,
+      "read_node_count": 0,
+      "color": "#3B7A57"
+    }
+  ],
+  "edges": [
+    {"from": 0, "to": 1, "weight": 8}
+  ],
+  "haplotype_edges": []
+}
+```
+
+### VCF output format
+
+When SV mode runs, Sharda writes `<prefix>.sv.vcf`.
+
+The current caller emits sequence-resolved simple indels only. Each record
+includes `SVTYPE`, `END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`,
+`SRC_REF_POS`, and `SNK_REF_POS` INFO fields. `SRC_*` and `SNK_*` identify the
+backbone unitigs and 1-based reference anchor coordinates that bound the
+reported interval.
+These anchors now describe the minimal canonical interval for each alternate
+path: the backbone departure point and the first downstream backbone rejoin.
+If multiple canonical traversals normalize to the same simple indel, Sharda
+keeps the strongest-supported representative call. `SUPPORT` reports that
+representative traversal's current ranking score, defined as the minimum mean
+depth across its non-backbone unitigs. Sharda also collapses a narrow class of
+overlapping canonical deletions when they share a source or sink boundary
+anchor and normalize to the same retained anchor base.
+
+Practical interpretation of the VCF fields:
+
+- `POS`, `REF`, `ALT`, `END`, and `SVLEN` describe the normalized simple indel
+  after trimming shared prefix and suffix sequence.
+- `SRC_REF_POS` and `SNK_REF_POS` describe the larger canonical backbone
+  interval that was used to construct and compare the reference and alternate
+  traversals before normalization.
+- Because of that normalization, two nearby calls may differ by one base in
+  `POS`/`REF`/`ALT` even when they originally came from overlapping canonical
+  source/sink intervals.
+- `SUPPORT` is a ranking field, not a read count. It is currently the minimum
+  `mean_depth` across the non-backbone unitigs on the surviving representative
+  traversal.
+
+When `--unitig-only` is set, Sharda stops before SV calling, so `<prefix>.sv.vcf`
+is not written even if `--sv-only` is also present.
 
 ### Read trace JSON format
 

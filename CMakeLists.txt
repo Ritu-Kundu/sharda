@@ -66,7 +66,7 @@ if(NOT HTSLIB OR NOT HTSLIB_INCLUDE)
 endif()
 
 # ── Library target ───────────────────────────────────────────────────────────
-file(GLOB_RECURSE SHARDA_SRC src/*.cpp)
+file(GLOB_RECURSE SHARDA_SRC CONFIGURE_DEPENDS src/*.cpp)
 list(FILTER SHARDA_SRC EXCLUDE REGEX "src/main\\.cpp$")
 
 add_library(sharda_lib STATIC ${SHARDA_SRC})
@@ -88,7 +88,7 @@ if(SHARDA_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
     enable_testing()
 
-    file(GLOB TEST_SRC tests/*.cpp)
+    file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/*.cpp)
     add_executable(sharda_tests ${TEST_SRC})
     target_link_libraries(sharda_tests PRIVATE sharda_lib GTest::gtest_main)
     include(GoogleTest)
