@@ -14,6 +14,7 @@
 #include "assembly/anchor_chain.h"
 #include "assembly/read_adder.h"
 #include "assembly/graph_cleaner.h"
+#include "assembly/flow_decomp.h"
 
 #include <fstream>
 #include <filesystem>
@@ -292,6 +293,35 @@ TEST(GraphCleaner, PrunesLowWeightNonBackboneEdgesUsingImpliedCoordinates) {
     EXPECT_FALSE(has_edge(graph, r1, r2));
     EXPECT_TRUE(has_edge(graph, b0, r1));
     EXPECT_TRUE(has_edge(graph, r2, b3));
+}
+
+TEST(FlowDecomposition, UsesAnchoredBoundaryUnitigsWhenTopologyIsAmbiguous) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    auto extra1 = graph.add_read_node("TTT");
+    auto extra2 = graph.add_read_node("TTA");
+    graph.add_edge(extra1, extra2);
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+    ASSERT_EQ(ug.unitig_count(), 2u);
+
+    auto unanchored_paths = sharda::flow_decomposition(ug, 2);
+    EXPECT_TRUE(unanchored_paths.empty());
+
+    sharda::FlowBoundaryAnchors anchors;
+    anchors.start_node_id = graph.backbone_node_at(0);
+    anchors.end_node_id = graph.backbone_node_at(5);
+
+    auto anchored_paths = sharda::flow_decomposition(ug, 2, anchors);
+    ASSERT_EQ(anchored_paths.size(), 1u);
+    ASSERT_EQ(anchored_paths[0].unitig_ids.size(), 1u);
+
+    const uint64_t anchored_unitig = ug.node_to_unitig(anchors.start_node_id);
+    EXPECT_EQ(anchored_unitig, ug.node_to_unitig(anchors.end_node_id));
+    EXPECT_EQ(anchored_paths[0].unitig_ids.front(), anchored_unitig);
+    EXPECT_EQ(anchored_paths[0].sequence, ug.unitig(anchored_unitig).sequence);
 }
 
 TEST(GraphCleaner, DoesNotPopBubblesDuringCleaning) {
@@ -685,6 +715,29 @@ TEST_F(TempFileTest, LocusTraceArtifactsWriteJson) {
                         std::istreambuf_iterator<char>());
     EXPECT_NE(content.find("\"reference_sequence\": \"ACGTA\""), std::string::npos);
     EXPECT_NE(content.find("\"global_start\": 10"), std::string::npos);
+}
+
+TEST_F(TempFileTest, FlowPathArtifactsWriteJson) {
+    sharda::DebugArtifactsConfig config;
+    config.enabled = true;
+    config.output_dir = tmp_path("debug_artifacts");
+
+    std::vector<sharda::HaplotypePath> paths = {{
+        {0, 4, 7},
+        "ignored-sequence",
+        12.5
+    }};
+
+    sharda::write_flow_path_artifacts(config, paths);
+
+    std::ifstream in(fs::path(config.output_dir) / "flow_paths.json");
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"graph_kind\": \"flow_paths\""), std::string::npos);
+    EXPECT_NE(content.find("\"flow\": 12.5"), std::string::npos);
+    EXPECT_NE(content.find("\"unitig_ids\": [0, 4, 7]"), std::string::npos);
+    EXPECT_EQ(content.find("\"sequence\""), std::string::npos);
+    EXPECT_EQ(content.find("\"node_ids\""), std::string::npos);
 }
 
 TEST(DebugQuery, FindsReadTraceObject) {

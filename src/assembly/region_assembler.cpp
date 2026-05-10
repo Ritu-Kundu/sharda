@@ -94,10 +94,26 @@ RegionResult assemble_region(const RegionParams& params) {
             write_unitig_gfa(params.debug_dir + "/unitig.gfa", ug);
         }
 
+        if (params.stop_after_unitig_graph) {
+            spdlog::info("[{}] Stopping after unitig graph construction", params.region_name);
+            result.success = true;
+            return result;
+        }
+
         // ── 5. Flow decomposition ───────────────────────────────────
         spdlog::info("[{}] Flow decomposition (ploidy={})",
                      params.region_name, params.ploidy);
-        auto paths = flow_decomposition(ug, params.ploidy);
+        FlowBoundaryAnchors anchors;
+        anchors.start_node_id = graph.backbone_node_at(0);
+        if (static_cast<int>(params.ref_seq.size()) >= params.k) {
+            anchors.end_node_id = graph.backbone_node_at(
+                static_cast<int32_t>(params.ref_seq.size()) - params.k);
+        }
+        auto paths = flow_decomposition(ug, params.ploidy, anchors);
+
+        if (params.debug_artifacts.should_write()) {
+            write_flow_path_artifacts(params.debug_artifacts, paths);
+        }
 
         if (paths.empty()) {
             result.error = "No haplotype paths found";

@@ -72,6 +72,10 @@ std::string stage_gfa_path(const DebugArtifactsConfig& config,
     return (fs::path(config.output_dir) / (stage_name + ".gfa")).string();
 }
 
+std::string flow_paths_json_path(const DebugArtifactsConfig& config) {
+    return (fs::path(config.output_dir) / "flow_paths.json").string();
+}
+
 struct StableNodeOrder {
     std::vector<uint64_t> ordered_internal_ids;
     std::vector<uint64_t> stable_id_by_internal;
@@ -153,7 +157,7 @@ void write_viewer(const DebugArtifactsConfig& config) {
 <body>
   <h1>Sharda Debug Viewer</h1>
   <p class="hint">This initial viewer is intentionally static. Use the JSON files in this directory as the structured graph source.</p>
-  <p class="hint">Expected files: raw.json, clean.json, unitig.json, manifest.json</p>
+    <p class="hint">Expected files: raw.json, clean.json, unitig.json, manifest.json, and optionally flow_paths.json, read_traces.json, locus_traces.json</p>
 </body>
 </html>
 )HTML";
@@ -175,7 +179,42 @@ void write_manifest(const DebugArtifactsConfig& config,
         << "    {\"name\": \"raw\", \"file\": \"raw.json\"},\n"
         << "    {\"name\": \"clean\", \"file\": \"clean.json\"},\n"
         << "    {\"name\": \"unitig\", \"file\": \"unitig.json\"}\n"
+        << "  ],\n"
+        << "  \"optional_artifacts\": [\n"
+        << "    {\"name\": \"flow_paths\", \"file\": \"flow_paths.json\"},\n"
+        << "    {\"name\": \"read_traces\", \"file\": \"read_traces.json\"},\n"
+        << "    {\"name\": \"locus_traces\", \"file\": \"locus_traces.json\"}\n"
         << "  ]\n"
+        << "}\n";
+}
+
+void write_flow_paths_json(const std::string& path,
+                           const std::vector<HaplotypePath>& paths) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("Cannot open flow path JSON: " + path);
+    }
+
+    out << "{\n"
+        << "  \"graph_kind\": \"flow_paths\",\n"
+        << "  \"paths\": [\n";
+
+    for (size_t path_index = 0; path_index < paths.size(); ++path_index) {
+        const auto& path_entry = paths[path_index];
+        out << "    {\"path_index\": " << path_index
+            << ", \"flow\": " << path_entry.flow
+            << ", \"unitig_ids\": [";
+        for (size_t unitig_index = 0; unitig_index < path_entry.unitig_ids.size(); ++unitig_index) {
+            out << path_entry.unitig_ids[unitig_index];
+            if (unitig_index + 1 != path_entry.unitig_ids.size()) {
+                out << ", ";
+            }
+        }
+        out << "]}";
+        out << (path_index + 1 == paths.size() ? "\n" : ",\n");
+    }
+
+    out << "  ]\n"
         << "}\n";
 }
 
@@ -641,6 +680,16 @@ void write_read_trace_artifacts(const DebugArtifactsConfig& config,
     ensure_debug_output_dir(config);
     write_read_trace_json_file((fs::path(config.output_dir) / "read_traces.json").string(),
                                traces);
+}
+
+void write_flow_path_artifacts(const DebugArtifactsConfig& config,
+                               const std::vector<HaplotypePath>& paths) {
+    if (!config.should_write() || paths.empty()) {
+        return;
+    }
+
+    ensure_debug_output_dir(config);
+    write_flow_paths_json(flow_paths_json_path(config), paths);
 }
 
 } // namespace sharda

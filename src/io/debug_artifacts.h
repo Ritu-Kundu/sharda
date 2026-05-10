@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assembly/flow_decomp.h"
 #include "util/debug_config.h"
 #include "util/locus_trace.h"
 #include "util/read_trace.h"
@@ -33,5 +34,7 @@ void finalize_read_traces(std::vector<ReadTraceRecord>& traces,
                           const UnitigGraph& unitig_graph);
 void write_read_trace_artifacts(const DebugArtifactsConfig& config,
                                 const std::vector<ReadTraceRecord>& traces);
+void write_flow_path_artifacts(const DebugArtifactsConfig& config,
+                               const std::vector<HaplotypePath>& paths);
 
 } // namespace sharda

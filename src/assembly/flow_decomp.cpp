@@ -69,12 +69,20 @@ std::string path_sequence(const UnitigGraph& ug, const std::vector<uint64_t>& pa
 }
 
 /// Find source and sink unitigs (containing min/max ref positions).
-std::pair<uint64_t, uint64_t> find_source_sink(const UnitigGraph& ug) {
-    uint64_t source = 0, sink = 0;
-    // The unitig with the smallest node ID is likely the start of the backbone.
-    // The one with the largest is likely the end.
-    // A better heuristic: find unitigs with in-degree=0 (source) and out-degree=0 (sink).
+std::pair<uint64_t, uint64_t> find_source_sink(
+    const UnitigGraph& ug,
+    FlowBoundaryAnchors anchors) {
     size_t n = ug.unitig_count();
+    if (n == 0) {
+        return {0, 0};
+    }
+
+    const uint64_t anchored_source = ug.node_to_unitig(anchors.start_node_id);
+    const uint64_t anchored_sink = ug.node_to_unitig(anchors.end_node_id);
+    if (anchored_source != UINT64_MAX && anchored_sink != UINT64_MAX) {
+        return {anchored_source, anchored_sink};
+    }
+
     std::vector<int> in_deg(n, 0), out_deg(n, 0);
     for (const auto& e : ug.edges()) {
         out_deg[e.from]++;
@@ -87,6 +95,13 @@ std::pair<uint64_t, uint64_t> find_source_sink(const UnitigGraph& ug) {
         if (out_deg[i] == 0) sinks.push_back(i);
     }
 
+    if (anchored_source == UINT64_MAX || anchored_sink == UINT64_MAX) {
+        spdlog::debug(
+            "Boundary anchors unresolved (start_node={}, end_node={}) — falling back to topology",
+            anchors.start_node_id,
+            anchors.end_node_id);
+    }
+
     if (sources.size() == 1 && sinks.size() == 1) {
         return {sources[0], sinks[0]};
     }
@@ -94,9 +109,9 @@ std::pair<uint64_t, uint64_t> find_source_sink(const UnitigGraph& ug) {
     // Fallback: use first and last unitig IDs
     spdlog::debug("Multiple sources ({}) or sinks ({}) — using first/last unitig",
                   sources.size(), sinks.size());
-    source = sources.empty() ? 0 : sources[0];
-    sink   = sinks.empty() ? (n - 1) : sinks.back();
-    return {source, sink};
+    const uint64_t fallback_source = sources.empty() ? 0 : sources[0];
+    const uint64_t fallback_sink = sinks.empty() ? (n - 1) : sinks.back();
+    return {fallback_source, fallback_sink};
 }
 
 } // anonymous namespace
@@ -104,11 +119,12 @@ std::pair<uint64_t, uint64_t> find_source_sink(const UnitigGraph& ug) {
 std::vector<HaplotypePath> flow_decomposition(
     const UnitigGraph& ug,
     int max_paths,
+    FlowBoundaryAnchors anchors,
     double time_limit_sec)
 {
     if (ug.unitig_count() == 0) return {};
 
-    auto [source, sink] = find_source_sink(ug);
+    auto [source, sink] = find_source_sink(ug, anchors);
     spdlog::info("Flow decomposition: source={}, sink={}, max_paths={}",
                  source, sink, max_paths);
 

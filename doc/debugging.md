@@ -1,11 +1,11 @@
 # Debugging Guide
 
 This document describes the current debugging workflow in Sharda, the artifact
-bundle written by debug mode, and how to inspect graph nodes from persisted
-outputs.
+bundle written by debug mode, and how to inspect graph nodes and ILP path
+outputs from persisted artifacts.
 
-The current framework is intentionally scoped to the pre-ILP graph pipeline.
-It captures the raw DBG, the cleaned DBG, and the compacted unitig graph.
+The current framework captures the raw DBG, the cleaned DBG, the compacted
+unitig graph, and the extracted ILP flow paths when flow decomposition runs.
 
 ## Scope
 
@@ -19,11 +19,11 @@ What the current debugging framework supports:
   `--debug-node`
 - targeted read tracing for named reads via `--trace-read`
 - targeted locus tracing for local reference intervals via `--trace-locus`
+- persisted ILP path tracing via `flow_paths.json`
 - post-hoc read and locus inspection from persisted JSON artifacts
 
 What it does not yet support:
 
-- post-ILP path tracing
 - a full interactive graph UI beyond the placeholder static HTML viewer
 - node history/provenance events across every mutation step
 
@@ -67,7 +67,9 @@ The simplest first pass is:
 2. open `clean.gfa` to compare the graph after tip pruning and low-weight edge pruning
 3. open `unitig.gfa` to inspect the compacted graph before flow decomposition
 4. open `raw.json`, `clean.json`, or `unitig.json` if you want structured
-   fields rather than GFA tags
+  fields rather than GFA tags
+5. open `flow_paths.json` to inspect the ILP-selected paths, their flows, and
+  the ordered unitigs contributing to each extracted haplotype path
 
 ### 3. Look up a specific node
 
@@ -192,9 +194,13 @@ clean.json
 unitig.json
 manifest.json
 viewer.html
+flow_paths.json
 read_traces.json
 locus_traces.json
 ```
+
+`flow_paths.json` is written only when flow decomposition runs and returns one
+or more paths. It is omitted in `--unitig-only` mode.
 
 ### `raw.gfa`
 
@@ -239,6 +245,14 @@ Structured unitig snapshot with:
 - unitig list
 - edge list
 - haplotype-edge list
+
+### `flow_paths.json`
+
+Structured ILP output snapshot with:
+
+- extracted path list
+- per-path flow value
+- ordered unitig ID list for each path
 
 ### `manifest.json`
 
@@ -430,6 +444,31 @@ Interpretation:
 - `removed_after_clean=true` means the node existed after read addition but did
   not survive graph cleaning
 - `unitig_id=null` means the node did not survive into the compacted graph
+
+### Flow path JSON format
+
+`flow_paths.json` currently uses this shape:
+
+```json
+{
+  "graph_kind": "flow_paths",
+  "paths": [
+    {
+      "path_index": 0,
+      "flow": 18.0,
+      "unitig_ids": [0, 4, 7]
+    }
+  ]
+}
+```
+
+Interpretation:
+
+- `flow` is the ILP-estimated path flow reported for that extracted haplotype
+- `unitig_ids` is the ordered compacted path used to build the haplotype
+  sequence
+- this file is absent when `--unitig-only` skips ILP or when no paths are
+  returned
 
 ## Current Query Model
 

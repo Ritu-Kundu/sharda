@@ -7,6 +7,11 @@
 
 namespace sharda {
 
+struct FlowBoundaryAnchors {
+    uint64_t start_node_id = UINT64_MAX;
+    uint64_t end_node_id = UINT64_MAX;
+};
+
 struct HaplotypePath {
     std::vector<uint64_t> unitig_ids; // ordered unitig IDs in path
     std::string           sequence;
@@ -20,6 +25,7 @@ struct HaplotypePath {
 std::vector<HaplotypePath> flow_decomposition(
     const UnitigGraph& ug,
     int max_paths,
+    FlowBoundaryAnchors anchors = {},
     double time_limit_sec = 60.0);
 
 } // namespace sharda

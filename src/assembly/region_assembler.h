@@ -17,6 +17,7 @@ struct RegionParams {
     std::vector<TandemRepeat> trs; // TRs in local coordinates
     int         ploidy  = 2;
     int         k       = 121;
+    bool        stop_after_unitig_graph = false;
     bool        debug   = false;
     std::string debug_dir;    // if non-empty, write GFA files here
     DebugArtifactsConfig debug_artifacts;

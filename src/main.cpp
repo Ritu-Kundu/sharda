@@ -75,6 +75,7 @@ struct Args {
     int         threads = 1;
     int         padding = 1000;
     std::string out_prefix = "sharda_out";
+    bool        stop_after_unitig_graph = false;
     bool        debug  = false;
 
     bool has_debug_node_lookup() const {
@@ -124,7 +125,7 @@ void usage(const char* prog) {
               << " -r <ref.fa> -b <reads.bam> -p <ploidy>\n"
               << "       [-R <targets.bed>] [-j threads] [-f padding]\n"
               << "       [-t <repeats.bed>]\n"
-              << "       [-k kmer_size] [-o out_prefix] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
+              << "       [-k kmer_size] [-o out_prefix] [--unitig-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
               << "       [--debug-dir <dir> --debug-node <name> [--debug-stage <stage>]]\n"
               << "       [--debug-dir <dir> --debug-read <name>] [--debug-dir <dir> --debug-locus <start:length>]\n"
               << "\n"
@@ -138,6 +139,7 @@ void usage(const char* prog) {
               << "  -f  Flanking padding in bp (default: 1000, used with -R)\n"
               << "  -k  Kmer size (default: 121)\n"
               << "  -o  Output prefix (default: sharda_out)\n"
+              << "  --unitig-only  Stop after unitig graph construction; skip ILP and haplotype FASTA output\n"
               << "  -d  Debug logging\n"
               << "  --trace-read   Trace a named read through raw, clean, and unitig stages\n"
               << "  --trace-locus  Trace a local reference interval through raw, clean, and unitig stages\n"
@@ -303,6 +305,7 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-j" && i + 1 < argc) a.threads = std::stoi(argv[++i]);
         else if (arg == "-f" && i + 1 < argc) a.padding = std::stoi(argv[++i]);
         else if (arg == "-o" && i + 1 < argc) a.out_prefix = argv[++i];
+        else if (arg == "--unitig-only") a.stop_after_unitig_graph = true;
         else if (arg == "--trace-read" && i + 1 < argc) a.trace_reads.push_back(argv[++i]);
         else if (arg == "--trace-locus" && i + 1 < argc) {
             sharda::LocusTraceRequest request;
@@ -483,11 +486,27 @@ int run_single_region(const Args& args) {
         spdlog::info("Unitig graph GFA: {}", unitig_gfa);
     }
 
+    if (args.stop_after_unitig_graph) {
+        spdlog::info("Stopping after unitig graph construction (--unitig-only)");
+        total_timer.finish();
+        return 0;
+    }
+
     // ── 6. Flow decomposition ───────────────────────────────────────
     spdlog::info("Running flow decomposition (ploidy={})", args.ploidy);
     StageTimer flow_timer("flow decomposition");
-    auto paths = sharda::flow_decomposition(ug, args.ploidy);
+    sharda::FlowBoundaryAnchors anchors;
+    anchors.start_node_id = graph.backbone_node_at(0);
+    if (static_cast<int>(ref_seq.size()) >= args.k) {
+        anchors.end_node_id = graph.backbone_node_at(
+            static_cast<int32_t>(ref_seq.size()) - args.k);
+    }
+    auto paths = sharda::flow_decomposition(ug, args.ploidy, anchors);
     flow_timer.finish();
+
+    if (debug_artifacts.should_write()) {
+        sharda::write_flow_path_artifacts(debug_artifacts, paths);
+    }
 
     if (paths.empty()) {
         spdlog::warn("No haplotype paths found");
@@ -590,6 +609,7 @@ int run_whole_genome(const Args& args) {
                 params.trs          = std::move(local_trs);
                 params.ploidy       = args.ploidy;
                 params.k            = args.k;
+                params.stop_after_unitig_graph = args.stop_after_unitig_graph;
                 params.debug        = args.debug;
                 params.debug_artifacts = make_debug_artifacts_config(args);
 
@@ -661,6 +681,15 @@ int run_whole_genome(const Args& args) {
 
     spdlog::info("Assembly complete: {}/{} regions succeeded, {} failed",
                  succeeded, targets.size(), failed);
+
+    if (args.stop_after_unitig_graph) {
+        if (succeeded == 0) {
+            spdlog::error("No regions completed unitig graph construction");
+            return 1;
+        }
+        spdlog::info("Stopped after unitig graph construction for all successful regions (--unitig-only)");
+        return 0;
+    }
 
     if (merged.empty()) {
         spdlog::error("No haplotypes assembled across any region");

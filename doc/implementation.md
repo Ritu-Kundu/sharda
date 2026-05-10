@@ -164,6 +164,9 @@ Thin orchestration layer for persisted debug outputs.
   artifacts (`<stage>.gfa`, `<stage>.json`) plus `manifest.json`.
 - `write_unitig_debug_artifacts(config, stage_name, graph)` — writes the same
   artifact set for the compacted unitig graph.
+- `write_flow_path_artifacts(config, unitig_graph, paths)` — writes
+  `flow_paths.json` for extracted ILP paths, including only the flow value and
+  ordered unitig IDs for each path.
 
 ### `src/io/gfa_writer.h / gfa_writer.cpp`
 
@@ -172,6 +175,8 @@ Thin orchestration layer for persisted debug outputs.
 - `write_unitig_gfa(path, unitig_graph)` — GFA1 output from a `UnitigGraph`.
 - `write_unitig_json(path, unitig_graph)` — structured JSON snapshot from a
   `UnitigGraph`.
+- `write_flow_path_artifacts(config, paths)` — structured JSON artifact for
+  ILP output paths.
 
 For DBG artifacts, serializer-visible node IDs are emitted in a stable order so
 repeated runs on the same input produce deterministic GFA and JSON node names.
@@ -251,9 +256,11 @@ early if a round produces no changes.
 
 ### `src/assembly/flow_decomp.h / flow_decomp.cpp`
 
-`flow_decomposition(unitig_graph, max_paths, time_limit_sec)`:
+`flow_decomposition(unitig_graph, max_paths, anchors, time_limit_sec)`:
 
-1. Identifies source (in-degree 0) and sink (out-degree 0) unitigs.
+1. Identifies source and sink unitigs from the exact start/end backbone anchors
+  when those boundary nodes survive compaction; otherwise falls back to the
+  topology-based source/sink heuristic.
 2. Enumerates all source-to-sink paths via DFS (capped at 1000).
 3. Precomputes which edges each path uses and which unitigs each path visits.
 4. Constructs an LP with HiGHS:

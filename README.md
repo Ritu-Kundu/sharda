@@ -187,6 +187,7 @@ This requires:
 | `-f` | Flanking padding in bp (with `-R`) | 1000 |
 | `-k` | k-mer size | 121 |
 | `-o` | Output prefix | `sharda_out` |
+| `--unitig-only` | Stop after unitig graph construction; skip ILP and haplotype FASTA output | off |
 | `-d` | Enable debug logging and GFA output | off |
 | `--trace-read` | Persist a trace for a specific read name in debug mode | repeatable |
 | `--trace-locus` | Persist a trace for a local reference interval in debug mode | repeatable |
@@ -202,8 +203,10 @@ This requires:
 - With `-d`: a debug artifact directory named `<prefix>_debug/`.
   In single-region mode it contains `raw.gfa`, `clean.gfa`, `unitig.gfa`,
   `raw.json`, `clean.json`, `unitig.json`, `manifest.json`, `viewer.html`,
-  and optionally `read_traces.json` and `locus_traces.json` when
-  `--trace-read` or `--trace-locus` are used.
+  `flow_paths.json` after ILP path extraction, and optionally
+  `read_traces.json` and `locus_traces.json` when `--trace-read` or
+  `--trace-locus` are used. `flow_paths.json` is not written when
+  `--unitig-only` is used or when no ILP paths are extracted.
 - In parallel mode, per-region debug output is written to
   `<prefix>_debug/<region>/`.
 
@@ -225,7 +228,18 @@ Generate debug artifacts for a single-region run:
 ```
 
 This writes `/tmp/sharda_debug_demo_debug/` with both compatibility GFA files
-and structured JSON snapshots for the raw, cleaned, and unitig graphs.
+and structured JSON snapshots for the raw, cleaned, and unitig graphs, plus
+`flow_paths.json` after ILP extraction.
+
+Inspect the extracted ILP paths and their unitig composition from an existing
+debug bundle:
+
+```bash
+python -m json.tool /tmp/sharda_debug_demo_debug/flow_paths.json
+```
+
+Each path entry includes the estimated `flow` and the ordered `unitig_ids` for
+that extracted ILP path.
 
 Look up a node by segment name from an existing debug artifact directory:
 

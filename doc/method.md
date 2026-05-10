@@ -240,9 +240,14 @@ phasing constraints from haplotype edges.
 
 ### Source and sink identification
 
-The unique unitig with in-degree 0 is the source; the one with out-degree 0 is
-the sink. If multiple candidates exist, the first source and last sink (by ID)
-are selected.
+Flow decomposition is anchored to the region boundaries. The source is the
+unitig containing the exact backbone node at the local region start, and the
+sink is the unitig containing the exact backbone node at the local region end
+(the backbone node at position `|ref|-k`). If either boundary anchor cannot be
+resolved in the compacted graph, the implementation falls back to the previous
+topology-based heuristic: use the unique in-degree-0 unitig as source and the
+unique out-degree-0 unitig as sink, or the first/last such candidates by ID if
+multiple exist.
 
 ### Path enumeration
 
@@ -286,7 +291,9 @@ fallback distributes average coverage equally across the first *ploidy* paths.
 ### Output extraction
 
 Paths with flow ≥ 0.5 are kept, sorted by descending flow. Each path's
-sequence is the concatenation of its unitig sequences.
+sequence is the concatenation of its unitig sequences. In debug mode, the same
+extracted paths can also be persisted to `flow_paths.json`, which records each
+path's flow, ordered unitigs, and per-unitig DBG node membership.
 
 ## 8. Coordinate handling in parallel mode
 
