@@ -122,22 +122,21 @@ Run Sharda on the example with:
 
 ```bash
 ./build/sharda \
-  -r resources/example_resources/eg1/example_region.fasta \
-  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
-  -p 2 \
-  -o resources/example_resources/eg1/results/sharda_eg1
-```
-
-To keep the graph outputs and verbose logging for debugging:
-
-```bash
-./build/sharda \
   -d \
+  -k 45 \
   -r resources/example_resources/eg1/example_region.fasta \
   -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
   -p 2 \
-  -o resources/example_resources/eg1/results/sharda_eg1_debug
+  -o resources/example_resources/eg1/results/sharda_eg1_k45
 ```
+
+With the current build, `-d` writes the staged debug bundle under
+`resources/example_resources/eg1/results/sharda_eg1_k45_debug/`.
+
+In the current build, the standard `eg1` run emits raw, cleaned, unitig, and
+SV-unitig graph outputs plus `sharda_eg1_k45.haplotypes.fa` and
+`sharda_eg1_k45.sv.vcf`. The current evaluation is recorded in
+`resources/example_resources/eg1/evaluation.md`.
 
 Relevant example files:
 
@@ -160,6 +159,55 @@ Relevant example files:
 For the exact commands used to generate the example data, see
 `doc/data/eg1/README.md`. For the current evaluation result on this dataset,
 see `resources/example_resources/eg1/evaluation.md`.
+
+The repository also includes a companion dataset under
+`resources/example_resources/eg2` built from the same region and the same 900 bp
+heterozygous deletion, but with no truth small variants and a higher simulated
+sequencing error rate (`wgsim -e 0.01`).
+
+Run Sharda on `eg2` with:
+
+```bash
+./build/sharda \
+  -d \
+  -k 45 \
+  -r resources/example_resources/eg2/example_region.fasta \
+  -b resources/example_resources/eg2/results/example_reads.namesorted.bam \
+  -p 2 \
+  -o resources/example_resources/eg2/results/sharda_eg2_k45
+```
+
+In the current build, the debug run emits raw, cleaned, unitig, and SV-unitig
+graph outputs plus `sharda_eg2_k45.haplotypes.fa` and `sharda_eg2_k45.sv.vcf`,
+and writes the staged debug bundle under
+`resources/example_resources/eg2/results/sharda_eg2_k45_debug/`. The current
+evaluation is recorded in `resources/example_resources/eg2/evaluation.md`.
+
+The latest verified local rerun of the current cleaner is summarized from
+`resources/example_resources/eg2/results/sharda_eg2_k45_componentfix*` to keep
+it distinct from an older local `sharda_eg2_k45_debug/` bundle.
+
+Relevant `eg2` files:
+
+- `resources/example_resources/eg2/example_region.fasta` — extracted reference
+  region used as the assembly backbone.
+- `resources/example_resources/eg2/example_region_ref.fa` — reference-like
+  haplotype with no truth SNP or indel edits.
+- `resources/example_resources/eg2/example_region_del.fa` — deleted haplotype
+  carrying only the 900 bp deletion.
+- `resources/example_resources/eg2/example_sample_truth.fa` — diploid truth
+  FASTA containing the deletion-free and deletion-carrying haplotypes.
+- `resources/example_resources/eg2/results/example_reads.coord.bam` —
+  coordinate-sorted BAM for inspection and downstream evaluation.
+- `resources/example_resources/eg2/results/example_reads.namesorted.bam` —
+  name-sorted BAM consumed by Sharda single-region mode.
+- `resources/example_resources/eg2/results/example_sample_truth_vs_ref.bam` —
+  coordinate-sorted indexed BAM of the truth haplotypes mapped to the example
+  reference for IGV visualization.
+
+For the exact commands used to generate `eg2`, see `doc/data/eg2/README.md`.
+For the current evaluation result on this dataset, see
+`resources/example_resources/eg2/evaluation.md`.
 
 ### Whole-genome parallel mode
 

@@ -11,7 +11,7 @@ IRR anchor-chaining path is never activated.
 
 ## Overview
 
-Sharda currently has three execution modes over the same graph-construction
+Sharda currently has four execution modes over the same graph-construction
 pipeline:
 
 - **Default combined mode** — build the graph, compact to unitigs, call
@@ -33,7 +33,9 @@ Sharda follows this pipeline for each target region:
    graph nodes from the reference sequence.
 2. **Read addition** — thread aligned reads through the graph, choosing between
    positional (ORR) and anchor-chained (IRR) strategies.
-3. **Graph cleaning** — iteratively remove under-supported tips and low-weight edges; bubble popping is currently disabled.
+3. **Graph cleaning** — iteratively remove under-supported tips, weak
+   internal alternate components, and low-weight edges; bubble popping is
+   currently disabled.
 4. **Unitig compaction** — collapse maximal non-branching paths into unitigs.
 5. **SV calling and/or flow decomposition** — depending on the execution mode,
    call simple indels from alternate unitig traversals and/or solve an ILP to
@@ -167,8 +169,9 @@ enforce phasing.
 ## 5. Graph cleaning
 
 Graph cleaning removes noise and errors iteratively (up to 10 rounds, stopping
-when no changes are made). The current implementation performs tip removal and
-low-weight edge pruning each round, and explicitly skips bubble popping.
+when no changes are made). The current implementation performs tip removal,
+weak internal alternate-component pruning, and low-weight edge pruning each
+round, and explicitly skips bubble popping.
 
 ### Tip removal
 
@@ -190,6 +193,34 @@ where `local_avg` is the mean edge weight in a local ±500 bp window around the
 tip's stored coordinates. Haplotype edges do not protect a tip from removal;
 they are ignored during tip tracing and only affect downstream phasing.
 
+### Weak internal alternate-component pruning
+
+Some low-support errors are not dead-end tips: they branch off the backbone or
+another supported path, wander through read-only nodes, and then reconnect.
+The cleaner now has a third pass for these internal alternates.
+
+It first traces simple linear internal branches whose endpoints are anchored by
+a divergence on one side and a convergence on the other. If that fails to form
+a long-enough candidate, it falls back to tracing the surrounding weak
+non-backbone component so split read-only braids can also be removed.
+
+A candidate branch/component is removed only when all of the following hold:
+
+- it contains at least two non-backbone nodes
+- every component-boundary support edge has weight 1
+- the mean boundary support is at most 1
+- the contextual threshold remains at most 1
+- the component is shorter than the mean read length limit used for tip pruning
+
+The contextual threshold is the same coverage-aware threshold used elsewhere:
+
+$$
+\max\left(0.05 \cdot \text{local avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
+$$
+
+This makes the pass intentionally narrow: it targets single-copy internal
+alternate read structure without removing more-supported alternate alleles.
+
 ### Low-weight edge pruning
 
 For each edge, the local average weight is computed over edges within a ±500 bp
@@ -200,14 +231,14 @@ coordinate in `ref_positions`.
 Backbone-to-backbone edges are removed when:
 
 $$
-   ext{edge weight} < 0.05 \cdot \text{local avg}
+	ext{edge weight} < 0.05 \cdot \text{local avg}
 $$
 
 Edges that involve at least one non-backbone node use the same regional floor
 as tip pruning and are removed when:
 
 $$
-   ext{edge weight} < \max\left(0.05 \cdot \text{local avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
+	ext{edge weight} < \max\left(0.05 \cdot \text{local avg},\; 0.25 \cdot \text{mean backbone node depth in the region}\right)
 $$
 
 This keeps pruning aggressive on weak read-derived branches without severing
@@ -219,7 +250,9 @@ Bubble popping is currently disabled. The code still reports this in the
 cleaning summary so debug logs make it explicit that no bubble-removal pass ran.
 
 After each operation, the graph's adjacency lists are rebuilt to reflect
-removals.
+removals. The per-iteration cleaning summary also reports
+`internal_branch_nodes_removed` and `internal_branch_edges_removed`, so the new
+pass is visible in debug logs.
 
 ## 6. Unitig compaction
 

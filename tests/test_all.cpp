@@ -401,6 +401,97 @@ TEST(GraphCleaner, PrunesEdgesUsingRegionalMeanDepthFloor) {
     EXPECT_TRUE(has_edge(graph, r1, b2));
 }
 
+TEST(GraphCleaner, PrunesWeakInternalAlternateBranch) {
+    sharda::DBG graph(3);
+    auto b0 = graph.add_backbone_node("AAA", 0, -1);
+    auto b1 = graph.add_backbone_node("AAT", 1, -1);
+    auto b2 = graph.add_backbone_node("ATC", 2, -1);
+    auto b3 = graph.add_backbone_node("TCG", 3, -1);
+    auto b4 = graph.add_backbone_node("CGT", 4, -1);
+
+    graph.node_mut(b0).depth = 4;
+    graph.node_mut(b1).depth = 4;
+    graph.node_mut(b2).depth = 4;
+    graph.node_mut(b3).depth = 4;
+    graph.node_mut(b4).depth = 4;
+
+    add_edge_copies(graph, b0, b1, 4);
+    add_edge_copies(graph, b1, b2, 4);
+    add_edge_copies(graph, b2, b3, 4);
+    add_edge_copies(graph, b3, b4, 4);
+
+    auto r0 = graph.add_read_node("CCA");
+    auto r1 = graph.add_read_node("CCC");
+    graph.add_node_ref_pos(r0, 1);
+    graph.add_node_ref_pos(r1, 2);
+
+    graph.add_edge(b1, r0);
+    graph.add_edge(r0, r1);
+    graph.add_edge(r1, b3);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_TRUE(graph.is_node_removed(r0));
+    EXPECT_TRUE(graph.is_node_removed(r1));
+    EXPECT_FALSE(has_edge(graph, b1, r0));
+    EXPECT_FALSE(has_edge(graph, r0, r1));
+    EXPECT_FALSE(has_edge(graph, r1, b3));
+    EXPECT_TRUE(has_edge(graph, b1, b2));
+    EXPECT_TRUE(has_edge(graph, b2, b3));
+}
+
+TEST(GraphCleaner, PrunesWeakInternalAlternateComponentWithSplit) {
+    sharda::DBG graph(3);
+    auto b0 = graph.add_backbone_node("AAA", 0, -1);
+    auto b1 = graph.add_backbone_node("AAT", 1, -1);
+    auto b2 = graph.add_backbone_node("ATC", 2, -1);
+    auto b3 = graph.add_backbone_node("TCG", 3, -1);
+    auto b4 = graph.add_backbone_node("CGT", 4, -1);
+
+    graph.node_mut(b0).depth = 4;
+    graph.node_mut(b1).depth = 4;
+    graph.node_mut(b2).depth = 4;
+    graph.node_mut(b3).depth = 4;
+    graph.node_mut(b4).depth = 4;
+
+    add_edge_copies(graph, b0, b1, 4);
+    add_edge_copies(graph, b1, b2, 4);
+    add_edge_copies(graph, b2, b3, 4);
+    add_edge_copies(graph, b3, b4, 4);
+
+    auto r0 = graph.add_read_node("CCA");
+    auto r1 = graph.add_read_node("CCC");
+    auto r2 = graph.add_read_node("CCG");
+    auto r3 = graph.add_read_node("CCT");
+    graph.add_node_ref_pos(r0, 1);
+    graph.add_node_ref_pos(r1, 2);
+    graph.add_node_ref_pos(r2, 3);
+    graph.add_node_ref_pos(r3, 3);
+
+    graph.add_edge(b1, r0);
+    graph.add_edge(r0, r1);
+    graph.add_edge(r1, r2);
+    graph.add_edge(r1, r3);
+    graph.add_edge(r2, b4);
+    graph.add_edge(r3, b4);
+
+    sharda::clean_graph(graph, 150);
+
+    EXPECT_TRUE(graph.is_node_removed(r0));
+    EXPECT_TRUE(graph.is_node_removed(r1));
+    EXPECT_TRUE(graph.is_node_removed(r2));
+    EXPECT_TRUE(graph.is_node_removed(r3));
+    EXPECT_FALSE(has_edge(graph, b1, r0));
+    EXPECT_FALSE(has_edge(graph, r0, r1));
+    EXPECT_FALSE(has_edge(graph, r1, r2));
+    EXPECT_FALSE(has_edge(graph, r1, r3));
+    EXPECT_FALSE(has_edge(graph, r2, b4));
+    EXPECT_FALSE(has_edge(graph, r3, b4));
+    EXPECT_TRUE(has_edge(graph, b1, b2));
+    EXPECT_TRUE(has_edge(graph, b2, b3));
+    EXPECT_TRUE(has_edge(graph, b3, b4));
+}
+
 TEST(GraphCleaner, PreservesBackboneEdgesInSvMode) {
     sharda::DBG default_graph(3);
     auto default_b0 = default_graph.add_backbone_node("AAA", 0, -1);

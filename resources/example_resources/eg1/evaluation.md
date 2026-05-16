@@ -1,6 +1,7 @@
 # Example 1 Evaluation
 
-This example was generated on 2026-04-30 from the extracted region in
+This example was re-evaluated on 2026-05-16 using the current `./build/sharda`
+binary from the extracted region in
 `resources/example_resources/eg1/example_region.fasta`.
 
 ## Configuration
@@ -21,7 +22,7 @@ This example was generated on 2026-04-30 from the extracted region in
 - Extra simulated variants: disabled (`-r 0 -R 0 -X 0`)
 - Sequencing error rate: `wgsim -e 0.001`
 - Aligner: `minimap2 -ax sr`
-- Assembler: `./build/sharda -p 2 -k 45`
+- Assembler: `./build/sharda -d -p 2 -k 45`
 
 ## Generated Inputs
 
@@ -63,18 +64,40 @@ Observed result:
 
 - Reference loaded: 2001 bp
 - Added read pairs: 53
-- Final status: one haplotype FASTA record was produced (733 bp, flow 5.0)
+- Graph after read addition: 2646 nodes, 2674 edges
+- Cleaned graph: 2646 nodes, 2230 edges
+- Unitig graph: 21 unitigs, 27 edges, 12 haplotype edges
+- Cleaning iteration 0: `internal_branch_nodes_removed=0`, `internal_branch_edges_removed=0`
+- Final status: six haplotype FASTA records and three SV calls were produced
 
-Sharda wrote graph outputs and one assembled haplotype:
+Sharda wrote graph, haplotype, and SV outputs for the current build:
 
 - `resources/example_resources/eg1/results/sharda_eg1_k45.raw.gfa`
 - `resources/example_resources/eg1/results/sharda_eg1_k45.clean.gfa`
 - `resources/example_resources/eg1/results/sharda_eg1_k45.unitig.gfa`
+- `resources/example_resources/eg1/results/sharda_eg1_k45.unitig.sv.gfa`
+- `resources/example_resources/eg1/results/sharda_eg1_k45.unitig.sv.json`
 - `resources/example_resources/eg1/results/sharda_eg1_k45.haplotypes.fa`
+- `resources/example_resources/eg1/results/sharda_eg1_k45.sv.vcf`
+
+Observed haplotype FASTA records:
+
+- 2573 bp (`flow=3.0`)
+- 1673 bp (`flow=2.0`)
+- 1674 bp (`flow=2.0`)
+- 2573 bp (`flow=1.0`)
+- 2572 bp (`flow=1.0`)
+- 1672 bp (`flow=1.0`)
+
+Observed SV calls in the VCF: 3 records
 
 ## Evaluation Outcome
 
-For the current `eg1` sample, Sharda still completes the `k=45` run and emits a
-single 733 bp haplotype sequence. The added SNPs and 1 bp indels change the
-truth haplotypes and read set, but the observed assembly remains a partial
-recovery rather than a full diploid reconstruction.
+For the current `eg1` sample, Sharda completes the `k=45` run and now emits a
+larger set of alternate haplotype paths plus an SV VCF. The resulting output is
+still not a clean diploid reconstruction of the two truth haplotypes: the
+haplotype FASTA is over-fragmented and includes paths substantially longer than
+the 2001 bp reference region, but the 900 bp deletion is represented in the SV
+calls. In this rerun, the new internal alternate-branch pruning path did not
+activate on `eg1`; the observed graph reduction still came from tip removal and
+low-weight edge pruning.

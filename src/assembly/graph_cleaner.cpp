@@ -11,6 +11,7 @@ namespace {
 constexpr double kRelativeSupportThreshold = 0.05;
 constexpr double kRegionMeanDepthThreshold = 0.25;
 constexpr int kLocalCoverageWindow = 500;
+constexpr int kMinInternalBranchNodes = 2;
 
 std::string format_tip_nodes(const std::vector<uint64_t>& tip) {
     std::ostringstream out;
@@ -175,6 +176,39 @@ std::vector<uint32_t> collect_tip_edge_weights(const DBG& graph,
     return weights;
 }
 
+std::vector<uint32_t> collect_path_edge_weights(const DBG& graph,
+                                                const std::vector<uint64_t>& path,
+                                                uint64_t source_anchor,
+                                                uint64_t sink_anchor) {
+    std::vector<uint32_t> weights;
+    if (path.empty()) {
+        return weights;
+    }
+
+    if (source_anchor != UINT64_MAX) {
+        uint32_t weight = edge_weight_between(graph, source_anchor, path.front());
+        if (weight > 0) {
+            weights.push_back(weight);
+        }
+    }
+
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        uint32_t weight = edge_weight_between(graph, path[i], path[i + 1]);
+        if (weight > 0) {
+            weights.push_back(weight);
+        }
+    }
+
+    if (sink_anchor != UINT64_MAX) {
+        uint32_t weight = edge_weight_between(graph, path.back(), sink_anchor);
+        if (weight > 0) {
+            weights.push_back(weight);
+        }
+    }
+
+    return weights;
+}
+
 std::vector<int32_t> collect_tip_positions(const DBG& graph,
                                            const std::vector<uint64_t>& tip) {
     std::vector<int32_t> positions;
@@ -249,6 +283,261 @@ void log_non_tip_skip(const DBG& graph, const Node& node) {
         in_degree,
         out_degree,
         node.depth);
+}
+
+bool is_internal_non_backbone_node(const DBG& graph, uint64_t node_id) {
+    const auto& node = graph.node(node_id);
+    return !node.is_backbone &&
+           !graph.is_node_removed(node_id) &&
+           graph.in_edges(node_id).size() == 1 &&
+           graph.out_edges(node_id).size() == 1;
+}
+
+bool is_active_non_backbone_node(const DBG& graph, uint64_t node_id) {
+    const auto& node = graph.node(node_id);
+    return !node.is_backbone && !graph.is_node_removed(node_id);
+}
+
+struct InternalBranch {
+    std::vector<uint64_t> nodes;
+    uint64_t source_anchor = UINT64_MAX;
+    uint64_t sink_anchor = UINT64_MAX;
+    double branch_support = 0.0;
+    double local_avg = 1.0;
+};
+
+InternalBranch trace_internal_branch(const DBG& graph, uint64_t start_node) {
+    InternalBranch branch;
+    if (!is_internal_non_backbone_node(graph, start_node)) {
+        return branch;
+    }
+
+    branch.nodes.push_back(start_node);
+
+    while (true) {
+        const auto& in_edges = graph.in_edges(branch.nodes.front());
+        if (in_edges.size() != 1) {
+            break;
+        }
+        const uint64_t prev = graph.edges()[in_edges[0]].from;
+        if (!is_internal_non_backbone_node(graph, prev)) {
+            break;
+        }
+        branch.nodes.insert(branch.nodes.begin(), prev);
+    }
+
+    while (true) {
+        const auto& out_edges = graph.out_edges(branch.nodes.back());
+        if (out_edges.size() != 1) {
+            break;
+        }
+        const uint64_t next = graph.edges()[out_edges[0]].to;
+        if (!is_internal_non_backbone_node(graph, next)) {
+            break;
+        }
+        branch.nodes.push_back(next);
+    }
+
+    const auto& source_in_edges = graph.in_edges(branch.nodes.front());
+    const auto& sink_out_edges = graph.out_edges(branch.nodes.back());
+    if (source_in_edges.size() != 1 || sink_out_edges.size() != 1) {
+        branch.nodes.clear();
+        return branch;
+    }
+
+    branch.source_anchor = graph.edges()[source_in_edges[0]].from;
+    branch.sink_anchor = graph.edges()[sink_out_edges[0]].to;
+    if (branch.source_anchor == UINT64_MAX || branch.sink_anchor == UINT64_MAX) {
+        branch.nodes.clear();
+        return branch;
+    }
+
+    const bool has_divergence = graph.out_edges(branch.source_anchor).size() > 1;
+    const bool has_convergence = graph.in_edges(branch.sink_anchor).size() > 1;
+    if (!has_divergence || !has_convergence) {
+        branch.nodes.clear();
+        return branch;
+    }
+
+    branch.local_avg = local_avg_weight(graph, collect_tip_positions(graph, branch.nodes));
+    branch.branch_support = mean_weight(
+        collect_path_edge_weights(graph, branch.nodes, branch.source_anchor, branch.sink_anchor));
+    return branch;
+}
+
+InternalBranch trace_internal_component(const DBG& graph, uint64_t start_node) {
+    InternalBranch branch;
+    if (!is_active_non_backbone_node(graph, start_node)) {
+        return branch;
+    }
+
+    std::vector<bool> in_component(graph.node_count(), false);
+    std::vector<uint64_t> stack = {start_node};
+    std::vector<uint64_t> source_candidates;
+    std::vector<uint64_t> sink_candidates;
+
+    while (!stack.empty()) {
+        const uint64_t node_id = stack.back();
+        stack.pop_back();
+        if (node_id >= in_component.size() || in_component[node_id] || !is_active_non_backbone_node(graph, node_id)) {
+            continue;
+        }
+
+        in_component[node_id] = true;
+        branch.nodes.push_back(node_id);
+
+        for (uint64_t edge_index : graph.in_edges(node_id)) {
+            const auto& edge = graph.edges()[edge_index];
+            if (edge.weight > 1) {
+                branch.nodes.clear();
+                return branch;
+            }
+
+            if (is_active_non_backbone_node(graph, edge.from)) {
+                stack.push_back(edge.from);
+            } else {
+                source_candidates.push_back(edge.from);
+            }
+        }
+
+        for (uint64_t edge_index : graph.out_edges(node_id)) {
+            const auto& edge = graph.edges()[edge_index];
+            if (edge.weight > 1) {
+                branch.nodes.clear();
+                return branch;
+            }
+
+            if (is_active_non_backbone_node(graph, edge.to)) {
+                stack.push_back(edge.to);
+            } else {
+                sink_candidates.push_back(edge.to);
+            }
+        }
+    }
+
+    if (branch.nodes.empty()) {
+        return branch;
+    }
+
+    std::sort(branch.nodes.begin(), branch.nodes.end());
+    branch.nodes.erase(std::unique(branch.nodes.begin(), branch.nodes.end()), branch.nodes.end());
+    std::sort(source_candidates.begin(), source_candidates.end());
+    source_candidates.erase(std::unique(source_candidates.begin(), source_candidates.end()), source_candidates.end());
+    std::sort(sink_candidates.begin(), sink_candidates.end());
+    sink_candidates.erase(std::unique(sink_candidates.begin(), sink_candidates.end()), sink_candidates.end());
+
+    const bool has_divergence_anchor = std::any_of(
+        source_candidates.begin(), source_candidates.end(), [&graph](uint64_t node_id) {
+            return !graph.is_node_removed(node_id) && graph.out_edges(node_id).size() > 1;
+        });
+    const bool has_convergence_anchor = std::any_of(
+        sink_candidates.begin(), sink_candidates.end(), [&graph](uint64_t node_id) {
+            return !graph.is_node_removed(node_id) && graph.in_edges(node_id).size() > 1;
+        });
+    if (!has_divergence_anchor && !has_convergence_anchor) {
+        branch.nodes.clear();
+        return branch;
+    }
+
+    branch.source_anchor = source_candidates.empty() ? UINT64_MAX : source_candidates.front();
+    branch.sink_anchor = sink_candidates.empty() ? UINT64_MAX : sink_candidates.front();
+
+    std::vector<int32_t> positions;
+    for (uint64_t node_id : branch.nodes) {
+        const auto node_positions = collect_node_positions(graph.node(node_id));
+        for (int32_t pos : node_positions) {
+            if (std::find(positions.begin(), positions.end(), pos) == positions.end()) {
+                positions.push_back(pos);
+            }
+        }
+    }
+    branch.local_avg = local_avg_weight(graph, positions);
+
+    std::vector<uint32_t> weights;
+    for (uint64_t node_id : branch.nodes) {
+        for (uint64_t edge_index : graph.in_edges(node_id)) {
+            const auto& edge = graph.edges()[edge_index];
+            if ((edge.from < in_component.size() && in_component[edge.from]) || edge.weight == 0) {
+                continue;
+            }
+            weights.push_back(edge.weight);
+        }
+        for (uint64_t edge_index : graph.out_edges(node_id)) {
+            const auto& edge = graph.edges()[edge_index];
+            if ((edge.to < in_component.size() && in_component[edge.to]) || edge.weight == 0) {
+                continue;
+            }
+            weights.push_back(edge.weight);
+        }
+    }
+    branch.branch_support = mean_weight(weights);
+    return branch;
+}
+
+int remove_weak_internal_branches(DBG& graph, int max_branch_len) {
+    int removed = 0;
+    std::vector<bool> visited(graph.node_count(), false);
+
+    for (const auto& node : graph.nodes()) {
+        const uint64_t node_id = node.id;
+        if (node_id >= visited.size() || visited[node_id] || !is_active_non_backbone_node(graph, node_id)) {
+            continue;
+        }
+
+        InternalBranch branch = trace_internal_branch(graph, node_id);
+        if (branch.nodes.size() < static_cast<size_t>(kMinInternalBranchNodes)) {
+            branch = trace_internal_component(graph, node_id);
+        }
+        for (uint64_t branch_node : branch.nodes) {
+            if (branch_node < visited.size()) {
+                visited[branch_node] = true;
+            }
+        }
+
+        if (branch.nodes.size() < static_cast<size_t>(kMinInternalBranchNodes)) {
+            continue;
+        }
+
+        const double contextual_threshold = support_threshold(graph, branch.local_avg, true);
+        const double threshold = 1.0;
+        if (static_cast<int>(branch.nodes.size()) >= max_branch_len ||
+            branch.branch_support > threshold ||
+            contextual_threshold > threshold) {
+            spdlog::debug(
+                "Internal branch kept: source_anchor={} sink_anchor={} chain={} length={} "
+                "branch_support={} local_avg={} threshold={} contextual_threshold={}",
+                branch.source_anchor,
+                branch.sink_anchor,
+                format_tip_nodes(branch.nodes),
+                branch.nodes.size(),
+                branch.branch_support,
+                branch.local_avg,
+                threshold,
+                contextual_threshold);
+            continue;
+        }
+
+        for (uint64_t branch_node : branch.nodes) {
+            if (!graph.is_node_removed(branch_node)) {
+                graph.remove_node(branch_node);
+                removed++;
+            }
+        }
+
+        spdlog::debug(
+            "Internal branch pruned: source_anchor={} sink_anchor={} chain={} length={} "
+            "branch_support={} local_avg={} threshold={} contextual_threshold={}",
+            branch.source_anchor,
+            branch.sink_anchor,
+            format_tip_nodes(branch.nodes),
+            branch.nodes.size(),
+            branch.branch_support,
+            branch.local_avg,
+            threshold,
+            contextual_threshold);
+    }
+
+    return removed;
 }
 
 /// Remove tips: dead-end paths shorter than threshold and under-supported
@@ -362,6 +651,12 @@ void clean_graph(DBG& graph,
         size_t edges_after_tips = graph.edge_count();
         size_t tip_edges_removed = edges_before_tips - edges_after_tips;
 
+        size_t edges_before_internal = graph.edge_count();
+        int internal_branches = remove_weak_internal_branches(graph, mean_read_length);
+        graph.rebuild_adjacency();
+        size_t edges_after_internal = graph.edge_count();
+        size_t internal_edges_removed = edges_before_internal - edges_after_internal;
+
         size_t edges_before_low_wt = graph.edge_count();
         int low_wt   = prune_low_weight_edges(graph, options);
         graph.rebuild_adjacency();
@@ -370,13 +665,15 @@ void clean_graph(DBG& graph,
 
         spdlog::info(
             "Cleaning iteration {}: tip_nodes_removed={}, tip_edges_removed={}, "
+            "internal_branch_nodes_removed={}, internal_branch_edges_removed={}, "
             "low_weight_edges_flagged={}, low_weight_edges_removed={}, "
             "bubble_popping_skipped=true, remaining_edges={}",
             iteration, tips, tip_edges_removed,
+            internal_branches, internal_edges_removed,
             low_wt, low_wt_edges_removed,
             graph.edge_count());
 
-        if (tips == 0 && low_wt == 0) break;
+        if (tips == 0 && internal_branches == 0 && low_wt == 0) break;
     }
 
     spdlog::info("Graph cleaning done: {} nodes, {} edges",

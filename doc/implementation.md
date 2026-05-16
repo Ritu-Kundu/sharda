@@ -271,7 +271,20 @@ Runs up to 10 rounds of:
   `max(0.05 * local_avg, 0.25 * mean_backbone_depth(graph))`. Haplotype edges
   are ignored for this decision and do not protect tips from removal.
 
-2. `prune_low_weight_edges(graph)` — for each edge, computes the mean weight of
+2. `remove_weak_internal_branches(graph, max_tip_len)` — traces weak
+  non-backbone alternate structure that is internal to the graph rather than a
+  dead-end tip. The cleaner first handles simple linear read-only branches
+  between a branching source anchor and a converging sink anchor, then falls
+  back to a small non-backbone component trace that can absorb internal splits.
+  A candidate branch/component is removed only when all of the following hold:
+  it contains at least two non-backbone nodes, every boundary-support edge seen
+  by the component has weight 1, its mean boundary support is at most 1, its
+  contextual threshold `max(0.05 * local_avg, 0.25 * mean_backbone_depth(graph))`
+  is not above 1, and its length stays below `max_tip_len`. This makes the pass
+  target single-copy internal alternate read structure without suppressing more
+  supported allelic branches.
+
+3. `prune_low_weight_edges(graph)` — for each edge, computes the mean weight of
   all edges within ±500 bp of the edge's endpoint coordinates. A node is
   considered local to the window if its `ref_pos` or any entry in its
   `ref_positions` falls in range. Backbone-backbone edges are removed when
@@ -282,12 +295,14 @@ Runs up to 10 rounds of:
   backbone-backbone edges are exempt from low-weight pruning so unsupported
   reference structure remains available to the SV caller.
 
-1. Bubble popping is currently skipped. The cleaner logs
+4. Bubble popping is currently skipped. The cleaner logs
   `bubble_popping_skipped=true` in each iteration summary and does not call the
   older bubble-removal heuristic.
 
-After each operation, `graph.rebuild_adjacency()` is called. The loop exits
-early if a round produces no changes.
+After each operation, `graph.rebuild_adjacency()` is called. Each iteration log
+also reports `internal_branch_nodes_removed` and
+`internal_branch_edges_removed` alongside the tip and low-weight edge counters.
+The loop exits early if a round produces no changes.
 
 ### `src/assembly/flow_decomp.h / flow_decomp.cpp`
 
@@ -552,11 +567,13 @@ Tests are in `tests/test_all.cpp` using GoogleTest. Current suites:
 | Suite | Tests | What is covered |
 | ----- | ----- | --------------- |
 | Kmer | 3 | k-mer extraction: basic, short input, empty |
-| TempFileTest | 1 | Temporary file creation and cleanup |
+| TempFileTest | 3 | FASTA round-trip, FASTA writing, and BED parsing through temporary files |
 | Backbone | 2 | Backbone node/edge counts, TR registration |
 | DBG | 3 | Read node creation, edge weight accumulation, haplotype edges |
-| ReadClassifier | 5 | Evidence detection for soft-clips, indels, SA tags, pairs, non-evidence |
-| UnitigGraph | 3 | Linear chain compaction, branching, unitig-level edge creation |
+| GraphCleaner | 9 | Tip pruning, regional floors, weak internal alternate branch/component pruning, and SV-mode backbone-edge preservation |
+| FlowDecomposition | 1 | Boundary-anchor fallback when topology-based source/sink selection is ambiguous |
+| ReadClassifier | 3 | Evidence detection for soft-clips, TR overlap, and non-evidence ORR reads |
+| UnitigGraph | 4 | Linear chain compaction, branch preservation, reverse-ID-order stability, and isolated singleton dropping |
 | TRFilter | 2 | Region filtering and local coordinate conversion |
 
 Run with:
