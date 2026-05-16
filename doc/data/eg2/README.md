@@ -119,10 +119,6 @@ bundle under `resources/example_resources/eg2/results/sharda_eg2_k45_debug/`.
 The detailed run result is summarized in
 `resources/example_resources/eg2/evaluation.md`.
 
-The latest verified 2026-05-16 rerun of the current cleaner was written to
-`resources/example_resources/eg2/results/sharda_eg2_k45_componentfix*` to keep
-it distinct from an older local `sharda_eg2_k45_debug/` bundle.
-
 The `results/` directory is reserved for derived BAMs and local Sharda run
 outputs. The generated FASTQ inputs live under
 `resources/example_resources/eg2/reads/`, and `resources/example_resources/eg2/results/sharda_eg2_*`

@@ -36,3 +36,4 @@ compile_commands.json
 sharda_out*
 /resources/example_resources/eg1/results/sharda_eg1_*
 /resources/example_resources/eg2/results/sharda_eg2_*
+/resources/example_resources/eg3/results/sharda_eg3_*

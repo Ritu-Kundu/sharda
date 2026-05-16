@@ -16,6 +16,15 @@ option(SHARDA_USE_SYSTEM_SPDLOG "Use a system-installed spdlog package instead o
 include(FetchContent)
 
 # spdlog
+if(NOT SHARDA_USE_SYSTEM_SPDLOG)
+    foreach(_sharda_cached_pkg_dir IN ITEMS spdlog_DIR fmt_DIR)
+        if(DEFINED ${_sharda_cached_pkg_dir})
+            message(STATUS "Clearing cached ${_sharda_cached_pkg_dir} because SHARDA_USE_SYSTEM_SPDLOG=OFF")
+            unset(${_sharda_cached_pkg_dir} CACHE)
+        endif()
+    endforeach()
+endif()
+
 if(SHARDA_USE_SYSTEM_SPDLOG)
     find_package(spdlog CONFIG QUIET)
 endif()

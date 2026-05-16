@@ -53,27 +53,20 @@ Command:
   -r resources/example_resources/eg2/example_region.fasta \
   -b resources/example_resources/eg2/results/example_reads.namesorted.bam \
   -p 2 \
-  -o resources/example_resources/eg2/results/sharda_eg2_k45_componentfix
+  -o resources/example_resources/eg2/results/sharda_eg2_k45
 ```
 
 Observed result:
 
-- Reference loaded: 2001 bp
-- Added read pairs: 53
-- Graph after read addition: 6025 nodes, 6097 edges, 16 haplotype edges
-- Cleaned graph: 6025 nodes, 2004 edges
-- Unitig graph: 8 unitigs, 10 edges, 3 haplotype edges
 - Final status: four haplotype FASTA records and two SV calls were produced
+- Unitig graph: 651 unitigs
+- Flow decomposition: 2 paths extracted for ploidy 2
 
 Sharda wrote graph, haplotype, and SV outputs for the current build:
 
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.raw.gfa`
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.clean.gfa`
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.unitig.gfa`
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.unitig.sv.gfa`
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.unitig.sv.json`
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.haplotypes.fa`
-- `resources/example_resources/eg2/results/sharda_eg2_k45_componentfix.sv.vcf`
+- `resources/example_resources/eg2/results/sharda_eg2_k45.haplotypes.fa`
+- `resources/example_resources/eg2/results/sharda_eg2_k45.sv.vcf`
+- `resources/example_resources/eg2/results/sharda_eg2_k45_debug/`
 
 Observed haplotype FASTA records:
 
@@ -84,17 +77,15 @@ Observed haplotype FASTA records:
 
 Observed SV calls in the VCF: 2 records
 
-The verified fresh debug rerun produced
-`resources/example_resources/eg2/results/sharda_eg2_k45_componentfix_debug/`,
-containing the raw, cleaned, and unitig graph bundles in both JSON and
-compatibility-GFA form. In that bundle, the previously discussed weak branch
-around node 5153 is removed by the current cleaner.
+The current debug rerun produced
+`resources/example_resources/eg2/results/sharda_eg2_k45_debug/`, containing the
+raw, cleaned, and unitig graph bundles in both JSON and compatibility-GFA form.
 
 ## Evaluation Outcome
 
-For the current `eg2` sample, the new internal alternate-component pruning pass
-collapses a large fraction of the weak 1x read-only structure, reducing the
-cleaned graph from 6097 to 2004 edges and the unitig graph to 8 unitigs in the
-verified fresh rerun. The current build still emits a haplotype FASTA and an SV
-VCF, but the assembled paths remain longer than the 2001 bp reference and are
-not yet a faithful diploid reconstruction.
+For the current `eg2` sample, Sharda completes the canonical `-d -k 45` run and
+emits a haplotype FASTA, an SV VCF, and the staged debug bundle under
+`sharda_eg2_k45_debug/`. The assembled paths remain longer than the 2001 bp
+reference and are not yet a faithful diploid reconstruction, but the rerun is
+now recorded against the standard `sharda_eg2_k45*` prefix rather than the
+older local `componentfix` outputs.

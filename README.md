@@ -183,10 +183,6 @@ and writes the staged debug bundle under
 `resources/example_resources/eg2/results/sharda_eg2_k45_debug/`. The current
 evaluation is recorded in `resources/example_resources/eg2/evaluation.md`.
 
-The latest verified local rerun of the current cleaner is summarized from
-`resources/example_resources/eg2/results/sharda_eg2_k45_componentfix*` to keep
-it distinct from an older local `sharda_eg2_k45_debug/` bundle.
-
 Relevant `eg2` files:
 
 - `resources/example_resources/eg2/example_region.fasta` — extracted reference
@@ -208,6 +204,35 @@ Relevant `eg2` files:
 For the exact commands used to generate `eg2`, see `doc/data/eg2/README.md`.
 For the current evaluation result on this dataset, see
 `resources/example_resources/eg2/evaluation.md`.
+
+The repository also includes a second companion dataset under
+`resources/example_resources/eg3` built from the same region with no truth
+small variants and no simulated sequencing errors (`wgsim -e 0`). Instead of a
+reference-like second haplotype, `eg3` uses overlapping deletions that start at
+the same position: one haplotype carries the same 900 bp deletion used in `eg2`
+and the other carries a 30 bp deletion over the same left breakpoint.
+
+Relevant `eg3` files:
+
+- `resources/example_resources/eg3/example_region.fasta` — extracted reference
+  region used as the assembly backbone.
+- `resources/example_resources/eg3/example_region_hap1_del900.fa` — haplotype
+  carrying the 900 bp deletion.
+- `resources/example_resources/eg3/example_region_hap2_del30.fa` — haplotype
+  carrying the 30 bp deletion starting at the same coordinate.
+- `resources/example_resources/eg3/example_sample_truth.fa` — diploid truth
+  FASTA containing both deletion haplotypes.
+- `resources/example_resources/eg3/results/example_reads.coord.bam` —
+  coordinate-sorted BAM for inspection and downstream evaluation.
+- `resources/example_resources/eg3/results/example_reads.namesorted.bam` —
+  name-sorted BAM consumed by Sharda single-region mode.
+- `resources/example_resources/eg3/results/example_sample_truth_vs_ref.bam` —
+  coordinate-sorted indexed BAM of the truth haplotypes mapped to the example
+  reference for IGV visualization.
+
+For the exact commands used to generate `eg3`, see `doc/data/eg3/README.md`.
+For the current evaluation result on this dataset, see
+`resources/example_resources/eg3/evaluation.md`.
 
 ### Whole-genome parallel mode
 
