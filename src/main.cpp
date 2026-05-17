@@ -76,6 +76,8 @@ struct Args {
     int         k       = 121;
     int         threads = 1;
     int         padding = 1000;
+    double      fragment_mean_fallback = -1.0;
+    double      fragment_sd_fallback = -1.0;
     sharda::ExecutionMode mode = sharda::ExecutionMode::Both;
     std::string out_prefix = "sharda_out";
     bool        stop_after_unitig_graph = false;
@@ -128,7 +130,7 @@ void usage(const char* prog) {
               << " -r <ref.fa> -b <reads.bam> -p <ploidy>\n"
               << "       [-R <targets.bed>] [-j threads] [-f padding]\n"
               << "       [-t <repeats.bed>]\n"
-              << "       [-k kmer_size] [-o out_prefix] [--unitig-only] [--sv-only | --hap-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
+              << "       [-k kmer_size] [-o out_prefix] [--fragment-mean <bp>] [--fragment-sd <bp>] [--unitig-only] [--sv-only | --hap-only] [-d] [--trace-read <name>] [--trace-locus <start:length>]\n"
               << "       [--debug-dir <dir> --debug-node <name> [--debug-stage <stage>]]\n"
               << "       [--debug-dir <dir> --debug-read <name>] [--debug-dir <dir> --debug-locus <start:length>]\n"
               << "\n"
@@ -142,6 +144,8 @@ void usage(const char* prog) {
               << "  -f  Flanking padding in bp (default: 1000, used with -R)\n"
               << "  -k  Kmer size (default: 121)\n"
               << "  -o  Output prefix (default: sharda_out)\n"
+              << "  --fragment-mean  Fallback fragment-length mean in bp when region-local calibration is unavailable\n"
+              << "  --fragment-sd    Fallback fragment-length standard deviation in bp when region-local calibration is unavailable\n"
               << "  --unitig-only  Stop after unitig graph construction; skip ILP and haplotype FASTA output\n"
               << "  --sv-only      Disable haplotype assembly and keep only SV-oriented outputs\n"
               << "  --hap-only     Disable SV calling and SV-oriented artifacts; keep haplotype outputs only\n"
@@ -310,6 +314,8 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-j" && i + 1 < argc) a.threads = std::stoi(argv[++i]);
         else if (arg == "-f" && i + 1 < argc) a.padding = std::stoi(argv[++i]);
         else if (arg == "-o" && i + 1 < argc) a.out_prefix = argv[++i];
+        else if (arg == "--fragment-mean" && i + 1 < argc) a.fragment_mean_fallback = std::stod(argv[++i]);
+        else if (arg == "--fragment-sd" && i + 1 < argc) a.fragment_sd_fallback = std::stod(argv[++i]);
         else if (arg == "--unitig-only") a.stop_after_unitig_graph = true;
         else if (arg == "--sv-only") a.mode = sharda::ExecutionMode::Sv;
         else if (arg == "--hap-only") a.mode = sharda::ExecutionMode::Haplotype;
@@ -330,6 +336,25 @@ Args parse_args(int argc, char* argv[]) {
         else if (arg == "-d") a.debug = true;
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); std::exit(0); }
         else { std::cerr << "Unknown arg: " << arg << '\n'; usage(argv[0]); std::exit(1); }
+    }
+    const bool has_fragment_mean = a.fragment_mean_fallback > 0.0;
+    const bool has_fragment_sd = a.fragment_sd_fallback > 0.0;
+    if (has_fragment_mean != has_fragment_sd) {
+        std::cerr << "Error: --fragment-mean and --fragment-sd must be provided together\n";
+        std::exit(1);
+    }
+    if ((a.fragment_mean_fallback == 0.0) != (a.fragment_sd_fallback == 0.0)
+        || a.fragment_mean_fallback == 0.0 || a.fragment_sd_fallback == 0.0) {
+        if (a.fragment_mean_fallback == 0.0 || a.fragment_sd_fallback == 0.0) {
+            std::cerr << "Error: --fragment-mean and --fragment-sd must be > 0\n";
+            std::exit(1);
+        }
+    }
+    if (a.fragment_mean_fallback < 0.0 && a.fragment_sd_fallback < 0.0) {
+        // no-op: fallback disabled unless both values are provided
+    } else if (a.fragment_mean_fallback <= 0.0 || a.fragment_sd_fallback <= 0.0) {
+        std::cerr << "Error: --fragment-mean and --fragment-sd must be > 0\n";
+        std::exit(1);
     }
     int debug_query_modes = 0;
     debug_query_modes += a.has_debug_node_lookup() ? 1 : 0;
@@ -394,6 +419,42 @@ void write_sv_output(const std::string& out_prefix,
     spdlog::info("SV output: {} ({} records)", out_vcf, sv_calls.size());
 }
 
+void write_pair_deletion_debug_output(
+    const std::string& path,
+    const std::vector<sharda::StructuralVariantCall>& pair_calls) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("Cannot open pair deletion debug JSON: " + path);
+    }
+
+    out << "{\n"
+        << "  \"graph_kind\": \"pair_deletions\",\n"
+        << "  \"calls\": [\n";
+
+    for (size_t index = 0; index < pair_calls.size(); ++index) {
+        const auto& call = pair_calls[index];
+        out << "    {\"id\": \"" << call.id << "\""
+            << ", \"chrom\": \"" << call.chrom << "\""
+            << ", \"pos\": " << call.pos
+            << ", \"end\": " << call.end
+            << ", \"sv_type\": \"" << call.sv_type << "\""
+            << ", \"sv_len\": " << call.sv_len
+            << ", \"support_score\": " << call.support_score
+            << ", \"info_fields\": [";
+        for (size_t field_index = 0; field_index < call.info_fields.size(); ++field_index) {
+            out << '"' << call.info_fields[field_index] << '"';
+            if (field_index + 1 != call.info_fields.size()) {
+                out << ", ";
+            }
+        }
+        out << "]}";
+        out << (index + 1 == pair_calls.size() ? "\n" : ",\n");
+    }
+
+    out << "  ]\n"
+        << "}\n";
+}
+
 /// Run the single-region pipeline (original behavior).
 int run_single_region(const Args& args) {
     // ── 1. Read inputs ──────────────────────────────────────────────
@@ -429,8 +490,12 @@ int run_single_region(const Args& args) {
     // ── 3. Add reads ────────────────────────────────────────────────
     spdlog::info("Adding reads from: {}", args.bam);
     uint64_t read_pairs = 0;
+    std::vector<sharda::ReadPair> sv_read_pairs;
     StageTimer read_timer("add reads");
     sharda::iterate_read_pairs(args.bam, [&](sharda::ReadPair&& pair) {
+        if (sharda::execution_mode_runs_sv(args.mode)) {
+            sv_read_pairs.push_back(pair);
+        }
         sharda::add_read_pair(pair, graph, trs, trace_sink);
         read_pairs++;
     });
@@ -515,7 +580,21 @@ int run_single_region(const Args& args) {
 
     std::vector<sharda::StructuralVariantCall> sv_calls;
     if (sharda::execution_mode_runs_sv(args.mode)) {
-        sv_calls = sharda::call_structural_variants(ug, ref_name, 0);
+        auto path_calls = sharda::call_structural_variants(ug, ref_name, 0);
+        auto pair_calls = sharda::call_pair_supported_deletions(
+            ug,
+            sv_read_pairs,
+            ref_name,
+            0,
+            2,
+            args.fragment_mean_fallback,
+            args.fragment_sd_fallback);
+        if (debug_artifacts.should_write()) {
+            write_pair_deletion_debug_output(
+                (fs::path(debug_artifacts.output_dir) / "pair_deletions.json").string(),
+                pair_calls);
+        }
+        sv_calls = sharda::merge_structural_variant_sources(std::move(path_calls), pair_calls);
     }
 
     if (args.stop_after_unitig_graph) {
@@ -651,6 +730,8 @@ int run_whole_genome(const Args& args) {
                 params.trs          = std::move(local_trs);
                 params.ploidy       = args.ploidy;
                 params.k            = args.k;
+                params.fragment_mean_fallback = args.fragment_mean_fallback;
+                params.fragment_sd_fallback = args.fragment_sd_fallback;
                 params.mode         = args.mode;
                 params.stop_after_unitig_graph = args.stop_after_unitig_graph;
                 params.debug        = args.debug;

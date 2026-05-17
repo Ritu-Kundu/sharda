@@ -302,9 +302,15 @@ Current SV-output behavior:
 - Still emits the standard single-region graph views (`raw.gfa`, `clean.gfa`,
   `unitig.gfa`) in non-debug single-region runs.
 - Adds SV-oriented unitig views as `unitig.sv.gfa` and `unitig.sv.json`.
-- Writes `<prefix>.sv.vcf` with `SVTYPE`, `END`, `SVLEN`, `SUPPORT`,
-  `SRC_UID`, `SNK_UID`, `SRC_REF_POS`, and `SNK_REF_POS`.
-- Calls sequence-resolved simple insertions and deletions only.
+- Writes `<prefix>.sv.vcf` with path-based simple indels plus pair-supported
+  deletion rescue records. Pair-aware records add `CALL_SOURCE`,
+  `PAIR_SUPPORT`, `PAIR_MAX_TLEN`, `PAIR_ANCHOR_GAP`, `PAIR_IMPLIED_DEL`, and
+  `PAIR_COV_RATIO` alongside `SVTYPE`, `END`, `SVLEN`, `SUPPORT`, `SRC_UID`,
+  `SNK_UID`, `SRC_REF_POS`, and `SNK_REF_POS`.
+- Calls sequence-resolved simple insertions and deletions from alternate
+  unitig traversals, and can additionally rescue long deletions from abnormal
+  read-pair spacing when repeat structure suppresses the usual clipped or
+  supplementary-alignment signal.
 
 Important distinction:
 
@@ -329,6 +335,8 @@ Important distinction:
 | `-f` | Flanking padding in bp (with `-R`) | 1000 |
 | `-k` | k-mer size | 121 |
 | `-o` | Output prefix | `sharda_out` |
+| `--fragment-mean` | Fallback fragment-length mean in bp for SV pair calibration when the region lacks enough concordant FR pairs | off |
+| `--fragment-sd` | Fallback fragment-length SD in bp for SV pair calibration when the region lacks enough concordant FR pairs | off |
 | `--unitig-only` | Stop after unitig graph construction; skip ILP and haplotype FASTA output | off |
 | `--sv-only` | Disable haplotype decomposition and emit SV outputs only | off |
 | `--hap-only` | Disable SV calling and SV-oriented artifacts; emit haplotypes only | off |
@@ -339,14 +347,21 @@ Important distinction:
 | `--debug-node` | Look up a node or unitig segment by name | — |
 | `--debug-stage` | Restrict lookup to `raw`, `clean`, or `unitig` | all stages |
 
+`--fragment-mean` and `--fragment-sd` must be supplied together. Sharda first
+tries to calibrate the fragment model from concordant FR pairs observed inside
+the region; the explicit values are only used when that local calibration is
+unavailable or undersampled.
+
 ### Output
 
 - `<prefix>.haplotypes.fa` — assembled haplotype sequences.
   In whole-genome mode, contig names embed region coordinates
   (e.g., `chr1:10000-20000_hap1_flow30`).
-- `<prefix>.sv.vcf` — simple indel calls from the unitig graph.
+- `<prefix>.sv.vcf` — SV calls from the unitig graph.
   Written in the default mode and in `--sv-only`, unless `--unitig-only` or
-  `--hap-only` is set.
+  `--hap-only` is set. Records can be sequence-resolved path calls, standalone
+  pair-supported deletions, or path calls annotated with reinforcing pair
+  evidence.
 - In single-region non-debug runs: `<prefix>.raw.gfa`, `<prefix>.clean.gfa`,
   and `<prefix>.unitig.gfa`.
 - In the default mode and in `--sv-only`: `<prefix>.unitig.sv.gfa` and
@@ -355,7 +370,8 @@ Important distinction:
   In single-region mode it contains `raw.gfa`, `clean.gfa`, `unitig.gfa`,
   `unitig.sv.gfa` and `unitig.sv.json` in the default mode and in `--sv-only`, `raw.json`,
   `clean.json`, `unitig.json`, `manifest.json`, `viewer.html`,
-  `flow_paths.json` after ILP path extraction, and optionally
+  `flow_paths.json` after ILP path extraction, `pair_deletions.json` in SV
+  mode, and optionally
   `read_traces.json` and `locus_traces.json` when `--trace-read` or
   `--trace-locus` are used. `unitig.gfa` segment lines carry aggregated
   coordinate tags (`RP`, `RPS`), and `unitig.json` includes per-unitig
@@ -363,6 +379,27 @@ Important distinction:
   `--unitig-only` is used or when no ILP paths are extracted.
 - In parallel mode, per-region debug output is written to
   `<prefix>_debug/<region>/`.
+
+### SV evidence sources
+
+Sharda currently combines two complementary SV signals in SV mode:
+
+- Path-based simple indels: canonical non-backbone traversals are compared
+  against the unique backbone path across the same interval. When the trimmed
+  difference reduces to a simple insertion or deletion, Sharda emits a
+  sequence-resolved VCF allele and ranks it by the minimum mean depth across
+  the representative alternate path.
+- Pair-supported deletion rescue: abnormal FR read pairs on the same reference
+  contig are grouped by their left and right backbone anchors. A candidate is
+  kept only when the interval between those anchors shows depressed backbone
+  depth, consistent with a deletion that reads span through rather than break
+  across.
+
+The pair-supported path is designed for long deletions in repeats, where the
+graph may stay reference-like and the usual clipped or supplementary evidence
+may be weak. If a pair-supported deletion overlaps a sequence-resolved deletion
+and shares one canonical backbone anchor, Sharda annotates the sequence-
+resolved record with the pair metrics instead of emitting a duplicate call.
 
 ### Debugging
 
@@ -383,9 +420,9 @@ Generate debug artifacts for a single-region run:
 
 This writes `/tmp/sharda_debug_demo_debug/` with both compatibility GFA files
 and structured JSON snapshots for the raw, cleaned, and unitig graphs, plus
-`flow_paths.json` after ILP extraction. The unitig artifacts preserve the
-leftmost coordinate represented by each unitig and the full sorted set of
-member-node coordinates.
+`flow_paths.json` after ILP extraction and `pair_deletions.json` in SV mode.
+The unitig artifacts preserve the leftmost coordinate represented by each
+unitig and the full sorted set of member-node coordinates.
 
 Inspect the extracted ILP paths and their unitig composition from an existing
 debug bundle:
@@ -396,6 +433,13 @@ python -m json.tool /tmp/sharda_debug_demo_debug/flow_paths.json
 
 Each path entry includes the estimated `flow` and the ordered `unitig_ids` for
 that extracted ILP path.
+
+`pair_deletions.json` records the fragment-length calibration used by the
+pair-supported deletion caller (`sample_count`, median, MAD, robust SD, and
+accepted bounds) plus each surviving anchor-to-anchor candidate with support
+count, maximum template length, implied deletion span, and interior-to-flank
+coverage ratio. Use it to confirm whether Sharda calibrated from local pairs or
+fell back to `--fragment-mean` / `--fragment-sd`.
 
 Look up a node by segment name from an existing debug artifact directory:
 

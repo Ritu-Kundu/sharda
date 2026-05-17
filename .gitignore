@@ -6,6 +6,7 @@
 
 # Prompt files
 /Prompts/
+/plans/
 
 # Large local-only resources
 /resources/raw_resources/

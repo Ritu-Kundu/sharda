@@ -15,7 +15,12 @@ AlignedRead bam1_to_read(bam1_t* b, bam_hdr_t* /*hdr*/) {
     AlignedRead r;
     r.name = bam_get_qname(b);
     r.flag = b->core.flag;
+    r.ref_id = b->core.tid;
     r.ref_start = b->core.pos; // 0-based
+    r.mate_ref_id = b->core.mtid;
+    r.mate_ref_start = b->core.mpos;
+    r.template_length = b->core.isize;
+    r.mapq = b->core.qual;
 
     // Sequence
     uint8_t* seq_ptr = bam_get_seq(b);

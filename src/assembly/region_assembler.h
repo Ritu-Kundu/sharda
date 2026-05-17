@@ -17,6 +17,8 @@ struct RegionParams {
     std::vector<TandemRepeat> trs; // TRs in local coordinates
     int         ploidy  = 2;
     int         k       = 121;
+    double      fragment_mean_fallback = -1.0;
+    double      fragment_sd_fallback = -1.0;
     ExecutionMode mode = ExecutionMode::Both;
     bool        stop_after_unitig_graph = false;
     bool        debug   = false;

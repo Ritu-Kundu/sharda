@@ -40,9 +40,11 @@ TargetRegion     { chrom, start, end }
 TandemRepeat     { id, chrom, start, end }
 CigarOp          enum: MATCH, INS, DEL, SOFT_CLIP, HARD_CLIP, SKIP, PAD
 CigarElement     { op, length }
-AlignedRead      { name, seq, qual, ref_start, ref_end, cigar, flag }
+AlignedRead      { name, seq, qual, ref_start, ref_end, cigar, flag,
+                   ref_id, mate_ref_id, mate_ref_start, template_length, mapq }
                  Helper methods: is_reverse(), is_secondary(), is_supplementary(),
-                 is_proper_pair(), is_unmapped(), mate_unmapped()
+                 is_proper_pair(), is_unmapped(), mate_unmapped(),
+                 mate_on_same_ref(), mate_is_reverse()
 ReadPair         { read1, read2 }
 ReadType         enum: ORR, IRR
 ReadClassification { type, is_evidence, tr_id }
@@ -55,6 +57,10 @@ HaplotypePath    { unitig_ids, sequence, flow }
 StructuralVariantCall { chrom, pos, end, id, ref, alt, sv_type, sv_len,
                         filter, info_fields }
 ```
+
+The additional mate/reference metadata on `AlignedRead` is now used by the SV
+pair-rescue path to calibrate fragment lengths and to recognise abnormal FR
+read pairs that span a putative deletion interval.
 
 Additional enums model pipeline mode and unitig provenance:
 
@@ -142,7 +148,8 @@ reconstruction can append unitig suffixes using a `k-1` overlap.
 - `iterate_read_pairs(bam_path, callback)` — streams through a name-sorted BAM,
   pairing reads by query name, and invokes the callback for each `ReadPair`.
   Skips secondary/supplementary/unmapped alignments. Builds `AlignedRead` from
-  htslib `bam1_t`.
+  htslib `bam1_t`, including reference IDs, mate reference IDs, mate start,
+  template length, and mapping quality for downstream SV calibration.
 
 - `create_region_bam(bam_path, region, padding, out_path)` — extracts reads
   overlapping `chrom:start-padding..end+padding` from an indexed BAM using
@@ -377,6 +384,32 @@ retained anchor base. The representative path's current ranking score is
 carried into the VCF as `SUPPORT`, defined as the minimum mean depth across the
 non-backbone unitigs on that traversal.
 
+`call_pair_supported_deletions(unitig_graph, read_pairs, chrom, coord_offset, ...)`:
+
+1. Collects template lengths from concordant FR pairs on the same reference
+  contig.
+2. Estimates fragment calibration from the local region when at least 25 such
+  pairs are available.
+3. Falls back to the explicit CLI/configured fragment mean and SD when local
+  calibration is missing or undersampled.
+4. Marks a pair as abnormal when `abs(template_length)` exceeds the calibrated
+  upper bound.
+5. Maps each pair's left and right anchors back to backbone-oriented unitigs.
+6. Aggregates support by `(left_unitig_id, right_unitig_id)` and computes the
+  maximum template length, mapped anchor gap, implied deletion span, and the
+  interior-to-flank coverage ratio for the interval.
+7. Keeps only candidates with at least two supporting pairs, positive implied
+  deletion span, and sufficiently depressed interior backbone depth.
+8. Emits symbolic `<DEL>` records with `CALL_SOURCE=PAIR` and the `PAIR_*`
+  INFO fields.
+
+`merge_structural_variant_sources(sequence_calls, pair_calls)` then combines the
+two evidence families before the final collapse pass. If a pair-derived
+deletion overlaps a sequence-resolved deletion and shares either the source or
+sink reference anchor, the path-based call is kept and annotated with the pair
+metrics as `CALL_SOURCE=PATH_PAIR`; otherwise the pair-supported deletion is
+retained as a standalone record.
+
 ### `src/assembly/region_assembler.h / region_assembler.cpp`
 
 `assemble_region(params)` → `RegionResult`:
@@ -393,10 +426,15 @@ assembly pipeline and returns in-memory results for one region:
 7. Writes unitig debug artifacts, plus `unitig.sv.gfa` / `unitig.sv.json`
   when SV mode is active.
 8. If `stop_after_unitig_graph` is set, returns early after artifact emission.
-9. In SV mode, calls simple indels from alternate unitig paths against a unique
-  backbone-only reference path and stores them in `RegionResult::sv_calls`.
-10. Runs flow decomposition only when haplotype mode is enabled.
-11. Converts haplotype paths into `RegionResult::haplotypes`.
+9. In SV mode, calibrates fragment lengths, optionally using configured
+  fallback mean/SD values, and collects abnormal read-pair deletion support.
+10. In SV mode, calls simple indels from alternate unitig paths against a
+  unique backbone-only reference path, calls pair-supported deletions, merges
+  the two sources, and stores them in `RegionResult::sv_calls`.
+11. In debug mode, writes `pair_deletions.json` alongside the other SV debug
+  artifacts.
+12. Runs flow decomposition only when haplotype mode is enabled.
+13. Converts haplotype paths into `RegionResult::haplotypes`.
 
 `assemble_region()` does not write the final merged FASTA or VCF files. Those
 top-level outputs are written by `main.cpp` after single-region execution or
@@ -407,8 +445,8 @@ VCF coordinates are already translated back to genomic coordinates before
 `main.cpp` writes them.
 
 `RegionParams` captures all inputs: reference path, BAM path, TRs, ploidy,
-k-mer size, output prefix, debug flag, debug artifact configuration, and
-optional region coordinates.
+k-mer size, output prefix, debug flag, debug artifact configuration, optional
+fragment mean/SD fallback values, and optional region coordinates.
 
 ### `src/util/debug_config.h`
 
@@ -440,15 +478,26 @@ Parses CLI arguments, then branches into one of three modes:
 In debug mode, the single-region and per-region whole-genome paths emit a
 persisted artifact bundle under `<out_prefix>_debug/` containing GFA snapshots,
 JSON snapshots, a manifest, and a lightweight static HTML viewer.
+When SV mode is active, that bundle also includes `pair_deletions.json` so the
+pair-support calibration and surviving anchor summaries can be inspected after
+the run.
 
 Default execution currently enables both haplotype and SV output paths. That
 preserves backbone-backbone edges during cleaning, emits additive
 `unitig.sv.gfa` / `unitig.sv.json` outputs, and writes `<out_prefix>.sv.vcf`
-with `SVTYPE`, `END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`,
-`SRC_REF_POS`, and `SNK_REF_POS` INFO fields. The source/sink fields expose
-the canonical backbone interval anchors used to derive each call. `--sv-only`
-keeps that SV path but skips haplotype flow decomposition, while `--hap-only`
-forces the old haplotype-only path and suppresses SV artifacts.
+with path-based simple indels plus pair-supported deletion rescue records. The
+VCF now uses `SVTYPE`, `END`, `SVLEN`, `SUPPORT`, `SRC_UID`, `SNK_UID`,
+`SRC_REF_POS`, and `SNK_REF_POS` for all current SV calls, and adds
+`CALL_SOURCE`, `PAIR_SUPPORT`, `PAIR_MAX_TLEN`, `PAIR_ANCHOR_GAP`,
+`PAIR_IMPLIED_DEL`, and `PAIR_COV_RATIO` when pair evidence is attached or
+emitted directly. The source/sink fields expose the canonical backbone interval
+anchors used to derive each call. `--sv-only` keeps that SV path but skips
+haplotype flow decomposition, while `--hap-only` forces the old
+haplotype-only path and suppresses SV artifacts.
+
+`main.cpp` also parses `--fragment-mean` and `--fragment-sd`, requires them to
+be supplied together, and threads them into both the single-region and
+whole-genome region-assembly paths as fallback fragment calibration parameters.
 
 In single-region mode without `-d`, `main.cpp` also writes:
 

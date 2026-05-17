@@ -124,17 +124,27 @@ struct AlignedRead {
     std::string              seq;
     std::string              qual;
     std::vector<CigarElement> cigar;
+    int32_t                  ref_id = -1;
     int32_t                  ref_start  = 0; // 0-based leftmost mapping pos
     int32_t                  ref_end    = 0; // 0-based exclusive
+    int32_t                  mate_ref_id = -1;
+    int32_t                  mate_ref_start = -1;
+    int32_t                  template_length = 0;
+    uint8_t                  mapq = 0;
     uint16_t                 flag       = 0;
     bool                     has_sa_tag = false; // supplementary alignment tag
 
     bool is_unmapped()      const { return flag & 0x4; }
     bool is_reverse()       const { return flag & 0x10; }
+    bool mate_is_reverse()  const { return flag & 0x20; }
+    bool mate_unmapped()    const { return flag & 0x8; }
     bool is_secondary()     const { return flag & 0x100; }
     bool is_supplementary() const { return flag & 0x800; }
     bool is_proper_pair()   const { return flag & 0x2; }
     bool is_read1()         const { return flag & 0x40; }
+    bool mate_on_same_ref() const {
+        return !is_unmapped() && !mate_unmapped() && ref_id >= 0 && ref_id == mate_ref_id;
+    }
 };
 
 // ── Read pair ───────────────────────────────────────────────────────────────

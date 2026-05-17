@@ -213,7 +213,7 @@ void write_viewer(const DebugArtifactsConfig& config) {
 <body>
   <h1>Sharda Debug Viewer</h1>
   <p class="hint">This initial viewer is intentionally static. Use the JSON files in this directory as the structured graph source.</p>
-    <p class="hint">Expected files: raw.json, clean.json, unitig.json, manifest.json, and optionally flow_paths.json, read_traces.json, locus_traces.json</p>
+        <p class="hint">Expected files: raw.json, clean.json, unitig.json, manifest.json, and optionally flow_paths.json, read_traces.json, locus_traces.json, pair_deletions.json</p>
 </body>
 </html>
 )HTML";
@@ -239,7 +239,8 @@ void write_manifest(const DebugArtifactsConfig& config,
         << "  \"optional_artifacts\": [\n"
         << "    {\"name\": \"flow_paths\", \"file\": \"flow_paths.json\"},\n"
         << "    {\"name\": \"read_traces\", \"file\": \"read_traces.json\"},\n"
-        << "    {\"name\": \"locus_traces\", \"file\": \"locus_traces.json\"}\n"
+        << "    {\"name\": \"locus_traces\", \"file\": \"locus_traces.json\"},\n"
+        << "    {\"name\": \"pair_deletions\", \"file\": \"pair_deletions.json\"}\n"
         << "  ]\n"
         << "}\n";
 }
@@ -857,6 +858,12 @@ void write_vcf(const std::string& path,
     out << "##INFO=<ID=SNK_UID,Number=1,Type=Integer,Description=\"Sink backbone unitig ID for the reference interval\">\n";
     out << "##INFO=<ID=SRC_REF_POS,Number=1,Type=Integer,Description=\"1-based reference anchor coordinate of the source backbone unitig\">\n";
     out << "##INFO=<ID=SNK_REF_POS,Number=1,Type=Integer,Description=\"1-based reference anchor coordinate of the sink backbone unitig\">\n";
+    out << "##INFO=<ID=CALL_SOURCE,Number=1,Type=String,Description=\"Primary evidence source for the call (PAIR, PATH_PAIR)\">\n";
+    out << "##INFO=<ID=PAIR_SUPPORT,Number=1,Type=Integer,Description=\"Number of abnormal read pairs supporting a pair-rescued deletion\">\n";
+    out << "##INFO=<ID=PAIR_MAX_TLEN,Number=1,Type=Integer,Description=\"Maximum observed template length among supporting read pairs\">\n";
+    out << "##INFO=<ID=PAIR_ANCHOR_GAP,Number=1,Type=Integer,Description=\"Maximum observed mapped reference gap between paired-read anchors\">\n";
+    out << "##INFO=<ID=PAIR_IMPLIED_DEL,Number=1,Type=Integer,Description=\"Maximum deletion span implied by abnormal template length relative to the local fragment model\">\n";
+    out << "##INFO=<ID=PAIR_COV_RATIO,Number=1,Type=Float,Description=\"Interior-to-flank depth ratio for the pair-supported reference interval\">\n";
     out << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
     std::vector<StructuralVariantCall> sorted_calls = calls;

@@ -321,6 +321,10 @@ execution. When SV output is enabled, Sharda:
 - emits SV-oriented unitig views as `unitig.sv.gfa` and `unitig.sv.json`
 - writes `<prefix>.sv.vcf`
 
+In debug mode, SV execution also writes `pair_deletions.json`, which records
+the fragment-length calibration and the surviving pair-supported deletion
+candidates considered in that region.
+
 With `--sv-only`, Sharda also skips haplotype flow decomposition and does not
 write `<prefix>.haplotypes.fa`.
 
@@ -332,8 +336,10 @@ construction and does not call SVs.
 
 ### Calling heuristic
 
-The current SV caller is intentionally conservative and limited to simple
-insertions and deletions.
+The current SV caller is intentionally conservative and limited to insertions
+and deletions. It combines two evidence families.
+
+#### 7.1 Sequence-resolved alternate-path calling
 
 For each backbone-only unitig with out-degree greater than one, the caller:
 
@@ -349,11 +355,43 @@ For each backbone-only unitig with out-degree greater than one, the caller:
 7. emits a call only if the remaining difference reduces to a simple insertion
    or deletion
 
-### Current call ranking and collapse rules
-
-Each emitted call carries a `SUPPORT` score, currently defined as the minimum
+Each emitted path-based call carries a `SUPPORT` score defined as the minimum
 `mean_depth` across the non-backbone unitigs on the representative alternate
 traversal.
+
+#### 7.2 Pair-supported deletion rescue
+
+Sharda also looks for deletions that do not create a clear alternate unitig
+path, particularly in repetitive sequence where reads align through the deleted
+haplotype and the graph stays largely reference-like.
+
+The pair-supported deletion caller:
+
+1. collects concordant FR pairs on the same reference contig with mapping
+   quality at least 20
+2. estimates the local fragment-length model from those pairs using the median
+   and median absolute deviation (MAD), converting MAD to a robust SD as
+   `1.4826 * MAD`
+3. treats a pair as abnormal when its observed template length exceeds the
+   upper calibration bound `median + 3 * robust_sd`
+4. falls back to explicit `--fragment-mean` and `--fragment-sd` values when the
+   region does not contain enough concordant pairs for reliable local
+   calibration
+5. anchors each abnormal pair to the backbone-oriented unitigs containing the
+   left read's mapped end and the right read's mapped start
+6. groups support by anchor pair and measures the mean backbone depth between
+   the anchors relative to the flanking anchor depth
+7. emits a symbolic deletion only when at least two abnormal pairs support the
+   same anchors, the implied deletion span is positive, and the interior depth
+   ratio is low enough to remain consistent with a deletion state
+
+This rescue path is deletion-only. It emits a symbolic `<DEL>` allele because
+the graph does not provide a reliable alternate sequence in these cases.
+
+### Current call ranking and collapse rules
+
+Path-based calls are ranked by representative-path depth. Pair-supported calls
+are ranked by the number of abnormal supporting read pairs.
 
 After candidate generation, the caller applies two collapse passes:
 
@@ -365,8 +403,14 @@ After candidate generation, the caller applies two collapse passes:
    `SVLEN`, retained anchor base in `ALT`, and either `SRC_REF_POS` or
    `SNK_REF_POS`
 
+Before that final collapse, Sharda merges the two evidence families. If a
+pair-supported deletion overlaps a sequence-resolved deletion and shares either
+the source or sink backbone anchor, the sequence-resolved record is retained
+and augmented with the pair metrics. Otherwise the pair-supported deletion is
+kept as its own VCF record.
+
 This is why the VCF can contain fewer records than the number of raw alternate
-traversals in the unitig graph.
+traversals in the unitig graph or pair-supported candidate intervals.
 
 ### VCF fields
 
@@ -380,10 +424,24 @@ traversals in the unitig graph.
   canonical interval
 - `SRC_REF_POS` and `SNK_REF_POS` — 1-based reference anchor coordinates for
   that canonical interval
+- `CALL_SOURCE` — present on pair-derived records; `PAIR` means a standalone
+   pair-rescued deletion and `PATH_PAIR` means a sequence-resolved deletion that
+   was reinforced by pair evidence
+- `PAIR_SUPPORT` — number of abnormal FR pairs supporting the deletion
+- `PAIR_MAX_TLEN` — largest observed template length among the supporting pairs
+- `PAIR_ANCHOR_GAP` — largest mapped reference gap between the paired-read
+   anchors
+- `PAIR_IMPLIED_DEL` — largest deletion span implied by template length beyond
+   the fragment model
+- `PAIR_COV_RATIO` — ratio of mean backbone depth inside the anchor interval to
+   the mean depth at the flanking anchors
 
 The normalized VCF allele can be smaller than the full canonical interval used
 to derive it. The source/sink INFO fields therefore provide additional context
 about where the alternate traversal departed from and rejoined the backbone.
+For standalone pair-supported deletions, the VCF allele is symbolic (`<DEL>`),
+so the anchor INFO fields and pair-specific metrics are the main way to inspect
+how the candidate was derived.
 
 ## 8. Flow decomposition
 
