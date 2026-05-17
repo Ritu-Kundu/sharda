@@ -246,12 +246,21 @@ SV-oriented unitig GFA segment records currently add:
 Internal helpers:
 
 - **`add_orr_path(read, graph)`** — derives an implied local coordinate for the
-  read's first k-mer from `read.ref_start`, increments one coordinate per k-mer,
-  and for each read k-mer first searches all backbone nodes carrying that k-mer.
-  If multiple backbone nodes match, it reuses the one closest to the implied
-  coordinate. If none match, it reuses or creates a read node keyed by k-mer
-  sequence, records the implied coordinate in that node's `ref_positions`, and
-  links the first divergent k-mer from backbone coordinate `N-1` when `N > 0`.
+  aligned portion first. When there is no left soft-clip, the first read k-mer
+  starts at `read.ref_start` and increments one coordinate per k-mer. When
+  there is a left soft-clip of length `L`, the first aligned k-mer still starts
+  at `read.ref_start`, while left-clipped k-mers get implied coordinates
+  `N-1`, `N-2`, ... to its left. Those left-clipped k-mers only reuse backbone
+  matches whose stored coordinate is strictly before `read.ref_start`; if
+  multiple earlier matches exist, the nearest implied coordinate wins,
+  otherwise placement falls back to a read node. To enforce that rule, the
+  helper resolves the aligned-start placements before the clipped-prefix
+  placements, but it still appends depth, trace nodes, and ordinary edges in
+  true read order. That keeps the clipped prefix connected forward into the
+  first aligned k-mer rather than creating reverse backbone edges. Read-node
+  placements record their implied coordinate in `ref_positions`. The special
+  branch edge from backbone coordinate `N-1` is only added for reads without a
+  left soft-clip.
 
 - **`add_irr_path(read, tr_id, graph)`** — extracts read k-mers, calls
   `find_and_chain_anchors`, then walks k-mer positions using anchored backbone

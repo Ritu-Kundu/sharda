@@ -70,6 +70,37 @@ uint64_t DBG::closest_backbone_node_for_kmer(const std::string& kmer,
     return best_id;
 }
 
+uint64_t DBG::closest_backbone_node_for_kmer_before(const std::string& kmer,
+                                                    int32_t implied_ref_pos,
+                                                    int32_t max_ref_pos_exclusive) const {
+    auto it = backbone_kmer_to_nodes_.find(kmer);
+    if (it == backbone_kmer_to_nodes_.end() || it->second.empty()) {
+        return UINT64_MAX;
+    }
+
+    uint64_t best_id = UINT64_MAX;
+    int64_t best_distance = 0;
+    int32_t best_pos = 0;
+
+    for (uint64_t node_id : it->second) {
+        const auto& backbone_node = node(node_id);
+        int32_t candidate_pos = backbone_node.ref_pos;
+        if (candidate_pos >= max_ref_pos_exclusive) {
+            continue;
+        }
+
+        int64_t distance = std::llabs(static_cast<long long>(candidate_pos) - implied_ref_pos);
+        if (best_id == UINT64_MAX || distance < best_distance ||
+            (distance == best_distance && candidate_pos < best_pos)) {
+            best_id = node_id;
+            best_distance = distance;
+            best_pos = candidate_pos;
+        }
+    }
+
+    return best_id;
+}
+
 uint64_t DBG::find_read_node(const std::string& kmer) const {
     auto it = kmer_to_node_.find(kmer);
     return (it != kmer_to_node_.end()) ? it->second : UINT64_MAX;

@@ -115,21 +115,39 @@ reads remain ORR.
 
 ### ORR path (implied-coordinate placement)
 
-For an ORR read starting at local coordinate $N$, the first read k-mer is given
+For an ORR read without a left soft-clip, the first read k-mer is given
 implied coordinate $N$ and each subsequent read k-mer gets implied coordinate
 $N + i$.
+
+If the read has a left soft-clip of length $L$, the first aligned k-mer still
+starts at implied coordinate $N$, and each following aligned-start k-mer keeps
+the same coordinates it would have had without the left soft-clip: $N + 1$,
+$N + 2$, and so on. K-mers whose start positions fall in the left soft-clipped
+prefix get implied coordinates immediately to the left of that anchor. For
+those left-clipped k-mers, Sharda only reuses a backbone occurrence if the
+matching backbone coordinate lies strictly before
+the first aligned k-mer's coordinate $N$; if no such earlier backbone
+occurrence exists, it falls back to a read node. The clipped k-mer
+immediately to the left of the aligned start gets implied coordinate $N - 1$,
+the next gets $N - 2$, and so on. The implementation may resolve those node
+choices after looking at the aligned-start portion, but the final ORR path is
+still threaded in true read order, so the clipped prefix connects forward into
+the first aligned k-mer exactly as it appears in the read.
 
 At each read k-mer position:
 
 1. Search backbone nodes carrying the same k-mer.
-2. If one or more backbone nodes match, reuse the backbone occurrence whose
-   coordinate is closest to the implied coordinate.
-3. If no backbone node matches, reuse or create a non-backbone read node keyed
+2. For left-clipped prefix k-mers, keep only matches whose coordinate is
+   strictly before the first aligned k-mer's coordinate $N$.
+3. If one or more eligible backbone nodes match, reuse the backbone occurrence
+   whose coordinate is closest to the implied coordinate.
+4. If no eligible backbone node matches, reuse or create a non-backbone read node keyed
    by k-mer string and record the implied coordinate in that node's
    `ref_positions` set.
-4. Add an edge from the previous chosen node. If the first read k-mer is novel
-   and $N > 0$, also add the requested branch edge from backbone coordinate
-   $N - 1$ into that first novel node.
+5. Add an edge from the previous chosen node in read order. If the read does
+   not have a left soft-clip, the first placed k-mer is novel, and $N > 0$,
+   also add the requested branch edge from backbone coordinate $N - 1$ into
+   that first novel node.
 
 This produces a path that follows the alignment start coordinate, but it is not
 restricted to exact positional backbone matches when a repeated backbone k-mer

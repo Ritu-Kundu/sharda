@@ -9,6 +9,12 @@ namespace sharda {
 
 namespace {
 
+struct OrrKmerPlacement {
+    uint64_t node_id = UINT64_MAX;
+    bool created = false;
+    int32_t implied_ref_pos = 0;
+};
+
 std::vector<int32_t> to_ref_position_vector(const std::set<int32_t>& ref_positions) {
     return {ref_positions.begin(), ref_positions.end()};
 }
@@ -86,6 +92,50 @@ uint64_t choose_path_node_for_kmer(const std::string& kmer,
     return nid;
 }
 
+uint64_t choose_left_clipped_path_node_for_kmer(const std::string& kmer,
+                                                int32_t implied_ref_pos,
+                                                int32_t aligned_start_ref_pos,
+                                                DBG& graph,
+                                                bool& created) {
+    uint64_t backbone_nid = graph.closest_backbone_node_for_kmer_before(
+        kmer, implied_ref_pos, aligned_start_ref_pos);
+    if (backbone_nid != UINT64_MAX) {
+        created = false;
+        return backbone_nid;
+    }
+
+    uint64_t existing_read_nid = graph.find_read_node(kmer);
+    created = existing_read_nid == UINT64_MAX;
+    uint64_t nid = graph.add_read_node(kmer);
+    graph.add_node_ref_pos(nid, implied_ref_pos);
+    return nid;
+}
+
+int leading_soft_clip_bases(const std::vector<CigarElement>& cigar) {
+    int soft_clip = 0;
+    bool at_start = true;
+
+    for (const auto& element : cigar) {
+        if (!at_start) {
+            break;
+        }
+
+        switch (element.op) {
+            case CigarOp::H:
+            case CigarOp::P:
+                break;
+            case CigarOp::S:
+                soft_clip += static_cast<int>(element.len);
+                break;
+            default:
+                at_start = false;
+                break;
+        }
+    }
+
+    return soft_clip;
+}
+
 /// Add an ORR-style read path using implied coordinates from the alignment start.
 /// Returns (first_node_id, last_node_id) added to the path.
 std::pair<uint64_t, uint64_t> add_orr_path(
@@ -97,27 +147,53 @@ std::pair<uint64_t, uint64_t> add_orr_path(
     auto kmers = extract_kmers(read.seq, k);
     if (kmers.empty()) return {UINT64_MAX, UINT64_MAX};
 
+    const int left_soft_clip = std::min<int>(leading_soft_clip_bases(read.cigar),
+                                             static_cast<int>(kmers.size()));
+
+    std::vector<OrrKmerPlacement> placements(kmers.size());
+    auto choose_kmer = [&](int ki) {
+        const int32_t implied_ref_pos = read.ref_start + ki - left_soft_clip;
+        bool created = false;
+        uint64_t nid = UINT64_MAX;
+        if (ki < left_soft_clip) {
+            nid = choose_left_clipped_path_node_for_kmer(
+                kmers[ki], implied_ref_pos, read.ref_start, graph, created);
+        } else {
+            nid = choose_path_node_for_kmer(kmers[ki], implied_ref_pos, graph, created);
+        }
+        placements[ki] = {nid, created, implied_ref_pos};
+    };
+
+    // Resolve aligned-start kmers first so left-clipped kmers can only reuse
+    // earlier backbone placements or fall back to read nodes.
+    for (int ki = left_soft_clip; ki < static_cast<int>(kmers.size()); ++ki) {
+        choose_kmer(ki);
+    }
+    for (int ki = left_soft_clip - 1; ki >= 0; --ki) {
+        choose_kmer(ki);
+    }
+
     uint64_t first_nid = UINT64_MAX;
     uint64_t prev_nid  = UINT64_MAX;
 
     for (int ki = 0; ki < static_cast<int>(kmers.size()); ++ki) {
-        int32_t implied_ref_pos = read.ref_start + ki;
-        bool created = false;
-        uint64_t nid = choose_path_node_for_kmer(kmers[ki], implied_ref_pos, graph, created);
+        const auto& placement = placements[ki];
+        uint64_t nid = placement.node_id;
         graph.node_mut(nid).depth++;
 
         if (first_nid == UINT64_MAX) {
             first_nid = nid;
 
-            if (!graph.node(nid).is_backbone && implied_ref_pos > 0) {
-                uint64_t predecessor = graph.backbone_node_at(implied_ref_pos - 1);
+            if (left_soft_clip == 0 && !graph.node(nid).is_backbone
+                && placement.implied_ref_pos > 0) {
+                uint64_t predecessor = graph.backbone_node_at(placement.implied_ref_pos - 1);
                 if (predecessor != UINT64_MAX && predecessor != nid) {
                     graph.add_edge(predecessor, nid);
                 }
             }
         }
 
-        append_trace_node(trace_record, graph, nid, created);
+        append_trace_node(trace_record, graph, nid, placement.created);
 
         if (prev_nid != UINT64_MAX && prev_nid != nid) {
             graph.add_edge(prev_nid, nid);

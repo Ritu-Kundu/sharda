@@ -133,11 +133,6 @@ Run Sharda on the example with:
 With the current build, `-d` writes the staged debug bundle under
 `resources/example_resources/eg1/results/sharda_eg1_k45_debug/`.
 
-In the current build, the standard `eg1` run emits raw, cleaned, unitig, and
-SV-unitig graph outputs plus `sharda_eg1_k45.haplotypes.fa` and
-`sharda_eg1_k45.sv.vcf`. The current evaluation is recorded in
-`resources/example_resources/eg1/evaluation.md`.
-
 Relevant example files:
 
 - `resources/example_resources/eg1/example_region.fasta` — extracted reference
@@ -157,8 +152,7 @@ Relevant example files:
   reference for IGV visualization.
 
 For the exact commands used to generate the example data, see
-`doc/data/eg1/README.md`. For the current evaluation result on this dataset,
-see `resources/example_resources/eg1/evaluation.md`.
+`doc/data/eg1/README.md`.
 
 The repository also includes a companion dataset under
 `resources/example_resources/eg2` built from the same region and the same 900 bp
@@ -176,12 +170,6 @@ Run Sharda on `eg2` with:
   -p 2 \
   -o resources/example_resources/eg2/results/sharda_eg2_k45
 ```
-
-In the current build, the debug run emits raw, cleaned, unitig, and SV-unitig
-graph outputs plus `sharda_eg2_k45.haplotypes.fa` and `sharda_eg2_k45.sv.vcf`,
-and writes the staged debug bundle under
-`resources/example_resources/eg2/results/sharda_eg2_k45_debug/`. The current
-evaluation is recorded in `resources/example_resources/eg2/evaluation.md`.
 
 Relevant `eg2` files:
 
@@ -202,8 +190,6 @@ Relevant `eg2` files:
   reference for IGV visualization.
 
 For the exact commands used to generate `eg2`, see `doc/data/eg2/README.md`.
-For the current evaluation result on this dataset, see
-`resources/example_resources/eg2/evaluation.md`.
 
 The repository also includes a second companion dataset under
 `resources/example_resources/eg3` built from the same region with no truth
@@ -231,8 +217,6 @@ Relevant `eg3` files:
   reference for IGV visualization.
 
 For the exact commands used to generate `eg3`, see `doc/data/eg3/README.md`.
-For the current evaluation result on this dataset, see
-`resources/example_resources/eg3/evaluation.md`.
 
 ### Whole-genome parallel mode
 

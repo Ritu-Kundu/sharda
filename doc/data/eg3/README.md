@@ -104,30 +104,6 @@ Generated IGV files:
 - `resources/example_resources/eg3/results/example_sample_truth_vs_ref.bam`
 - `resources/example_resources/eg3/results/example_sample_truth_vs_ref.bam.bai`
 
-## Assembly Run
-
-The current build was exercised against this sample with the same single-region
-debug configuration used for `eg1` and `eg2`:
-
-```bash
-./build/sharda \
-  -d \
-  -k 45 \
-  -r resources/example_resources/eg3/example_region.fasta \
-  -b resources/example_resources/eg3/results/example_reads.namesorted.bam \
-  -p 2 \
-  -o resources/example_resources/eg3/results/sharda_eg3_k45
-```
-
-In the 2026-05-16 local validation run, this invocation did not complete and no
-`sharda_eg3_k45*` outputs were produced before the stale cached `spdlog`/`fmt`
-build issue was fixed. After rebuilding Sharda from a clean local `build/`
-tree, the canonical 2026-05-16 rerun completed and wrote
-`resources/example_resources/eg3/results/sharda_eg3_k45.haplotypes.fa`,
-`resources/example_resources/eg3/results/sharda_eg3_k45.sv.vcf`, and the staged
-debug bundle under `resources/example_resources/eg3/results/sharda_eg3_k45_debug/`.
-That status is summarized in `resources/example_resources/eg3/evaluation.md`.
-
 The `results/` directory is reserved for derived BAMs and local Sharda run
 outputs. The generated FASTQ inputs live under
 `resources/example_resources/eg3/reads/`, and `resources/example_resources/eg3/results/sharda_eg3_*`

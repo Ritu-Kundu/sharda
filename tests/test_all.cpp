@@ -925,6 +925,124 @@ TEST(ReadAdder, OrrReadNodesAccumulateImpliedCoordinates) {
     EXPECT_TRUE(graph.node(first_read_node).ref_positions.count(4) > 0);
 }
 
+TEST(ReadAdder, OrrLeftSoftClipUsesPreAlignmentCoordinatesWithoutBranchEdge) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    sharda::ReadPair pair;
+    pair.read1.name = "orr_left_softclip";
+    pair.read1.seq = "TTTAC";
+    pair.read1.cigar = {{sharda::CigarOp::S, 2}, {sharda::CigarOp::M, 3}};
+    pair.read1.ref_start = 3;
+    pair.read1.ref_end = 6;
+    pair.read1.flag = 0x43;
+
+    pair.read2.name = "mate_unused";
+    pair.read2.seq = "AC";
+    pair.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair.read2.ref_start = 0;
+    pair.read2.ref_end = 2;
+    pair.read2.flag = 0x83;
+
+    sharda::add_read_pair(pair, graph, {});
+
+    uint64_t leftmost_read_node = graph.find_read_node("TTT");
+    ASSERT_NE(leftmost_read_node, UINT64_MAX);
+    EXPECT_TRUE(graph.node(leftmost_read_node).ref_positions.count(1) > 0);
+    EXPECT_FALSE(graph.node(leftmost_read_node).ref_positions.count(3) > 0);
+
+    uint64_t first_clipped_node = graph.find_read_node("TTA");
+    ASSERT_NE(first_clipped_node, UINT64_MAX);
+    EXPECT_TRUE(graph.node(first_clipped_node).ref_positions.count(2) > 0);
+
+    uint64_t predecessor = graph.backbone_node_at(2);
+    ASSERT_NE(predecessor, UINT64_MAX);
+
+    bool found_branch = false;
+    for (uint64_t edge_index : graph.out_edges(predecessor)) {
+        if (graph.edges()[edge_index].to == first_clipped_node) {
+            found_branch = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(found_branch);
+}
+
+TEST(ReadAdder, OrrLeftSoftClipStillPlacesAlignedKmersOnBackbone) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "ACGTACGT", {});
+
+    sharda::ReadPair pair;
+    pair.read1.name = "orr_left_softclip_trace";
+    pair.read1.seq = "TTTAC";
+    pair.read1.cigar = {{sharda::CigarOp::S, 2}, {sharda::CigarOp::M, 3}};
+    pair.read1.ref_start = 3;
+    pair.read1.ref_end = 6;
+    pair.read1.flag = 0x43;
+
+    pair.read2.name = "mate_unused";
+    pair.read2.seq = "AC";
+    pair.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair.read2.ref_start = 0;
+    pair.read2.ref_end = 2;
+    pair.read2.flag = 0x83;
+
+    std::vector<std::string> traced_reads = {"orr_left_softclip_trace"};
+    std::vector<sharda::ReadTraceRecord> traces;
+    sharda::ReadTraceSink trace_sink{&traced_reads, &traces};
+
+    sharda::add_read_pair(pair, graph, {}, trace_sink);
+
+    ASSERT_EQ(traces.size(), 1u);
+    ASSERT_EQ(traces[0].raw_nodes.size(), 3u);
+    EXPECT_EQ(traces[0].raw_nodes[0].node_id, graph.find_read_node("TTT"));
+    EXPECT_EQ(traces[0].raw_nodes[1].node_id, graph.find_read_node("TTA"));
+    EXPECT_EQ(traces[0].raw_nodes[2].node_id, graph.backbone_node_at(3));
+
+    EXPECT_TRUE(has_edge(graph, graph.find_read_node("TTT"), graph.find_read_node("TTA")));
+    EXPECT_TRUE(has_edge(graph, graph.find_read_node("TTA"), graph.backbone_node_at(3)));
+}
+
+TEST(ReadAdder, OrrLeftSoftClipFallsBackToReadNodeWhenOnlyLaterBackboneMatchesExist) {
+    sharda::DBG graph(3);
+    sharda::build_backbone(graph, "CGTAAATTT", {});
+
+    sharda::ReadPair pair;
+    pair.read1.name = "orr_left_softclip_later_backbone_only";
+    pair.read1.seq = "AAAAA";
+    pair.read1.cigar = {{sharda::CigarOp::S, 2}, {sharda::CigarOp::M, 3}};
+    pair.read1.ref_start = 3;
+    pair.read1.ref_end = 6;
+    pair.read1.flag = 0x43;
+
+    pair.read2.name = "mate_unused";
+    pair.read2.seq = "AC";
+    pair.read2.cigar = {{sharda::CigarOp::M, 2}};
+    pair.read2.ref_start = 0;
+    pair.read2.ref_end = 2;
+    pair.read2.flag = 0x83;
+
+    std::vector<std::string> traced_reads = {"orr_left_softclip_later_backbone_only"};
+    std::vector<sharda::ReadTraceRecord> traces;
+    sharda::ReadTraceSink trace_sink{&traced_reads, &traces};
+
+    sharda::add_read_pair(pair, graph, {}, trace_sink);
+
+    uint64_t aligned_backbone = graph.backbone_node_at(3);
+    uint64_t clipped_read_node = graph.find_read_node("AAA");
+    ASSERT_NE(aligned_backbone, UINT64_MAX);
+    ASSERT_NE(clipped_read_node, UINT64_MAX);
+    EXPECT_FALSE(graph.node(clipped_read_node).is_backbone);
+    EXPECT_TRUE(graph.node(clipped_read_node).ref_positions.count(1) > 0);
+    EXPECT_TRUE(graph.node(clipped_read_node).ref_positions.count(2) > 0);
+
+    ASSERT_EQ(traces.size(), 1u);
+    ASSERT_EQ(traces[0].raw_nodes.size(), 3u);
+    EXPECT_EQ(traces[0].raw_nodes[0].node_id, clipped_read_node);
+    EXPECT_EQ(traces[0].raw_nodes[1].node_id, clipped_read_node);
+    EXPECT_EQ(traces[0].raw_nodes[2].node_id, aligned_backbone);
+}
+
 TEST_F(TempFileTest, DebugArtifactsWriteJsonAndViewer) {
     sharda::DBG graph(3);
     sharda::build_backbone(graph, "ACGTAC", {});

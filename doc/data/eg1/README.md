@@ -101,25 +101,6 @@ Generated IGV files:
 - `resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam`
 - `resources/example_resources/eg1/results/example_sample_truth_vs_ref.bam.bai`
 
-## Assembly Run
-
-Sharda was run in single-region mode with ploidy 2 and `k=45`:
-
-```bash
-./build/sharda \
-  -d \
-  -k 45 \
-  -r resources/example_resources/eg1/example_region.fasta \
-  -b resources/example_resources/eg1/results/example_reads.namesorted.bam \
-  -p 2 \
-  -o resources/example_resources/eg1/results/sharda_eg1_k45
-```
-
-This debug-mode run currently produces raw, cleaned, unitig, and SV-unitig
-graph outputs, a haplotype FASTA, an SV VCF, and the staged debug bundle under
-`resources/example_resources/eg1/results/sharda_eg1_k45_debug/`. The detailed
-run result is summarized in `resources/example_resources/eg1/evaluation.md`.
-
 The `results/` directory is reserved for derived BAMs and local Sharda run
 outputs. The generated FASTQ inputs live under
 `resources/example_resources/eg1/reads/`, and `resources/example_resources/eg1/results/sharda_eg1_*`

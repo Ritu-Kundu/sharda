@@ -40,6 +40,11 @@ public:
     uint64_t closest_backbone_node_for_kmer(const std::string& kmer,
                                            int32_t implied_ref_pos) const;
 
+    /// Lookup the nearest backbone node with this k-mer strictly before a coordinate.
+    uint64_t closest_backbone_node_for_kmer_before(const std::string& kmer,
+                                                   int32_t implied_ref_pos,
+                                                   int32_t max_ref_pos_exclusive) const;
+
     /// Lookup non-backbone node by kmer. Returns UINT64_MAX if not found.
     uint64_t find_read_node(const std::string& kmer) const;
 
