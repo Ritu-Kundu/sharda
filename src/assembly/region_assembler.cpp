@@ -91,10 +91,31 @@ std::unordered_map<int32_t, uint64_t> build_ref_pos_to_unitig_map(const UnitigGr
 
 bool is_pair_deletion_signal(const ReadPair& pair,
                              const FragmentLengthStats& fragment_stats) {
-    if (!fragment_stats.available() || !is_fr_calibration_pair(pair)) {
+    if (!fragment_stats.available()) {
         return false;
     }
-    return std::abs(pair.read1.template_length) > fragment_stats.upper_bound;
+
+    const AlignedRead* left = &pair.read1;
+    const AlignedRead* right = &pair.read2;
+    if (left->ref_start > right->ref_start) {
+        std::swap(left, right);
+    }
+
+    if (!left->mate_on_same_ref() || !right->mate_on_same_ref()) {
+        return false;
+    }
+    if (left->mapq < kMinFragmentCalibrationMapq || right->mapq < kMinFragmentCalibrationMapq) {
+        return false;
+    }
+    if (left->is_reverse() || !right->is_reverse()) {
+        return false;
+    }
+
+    const int32_t template_length = std::abs(left->template_length);
+    if (template_length <= 0 || right->ref_start < left->ref_start) {
+        return false;
+    }
+    return template_length > fragment_stats.upper_bound;
 }
 
 std::vector<PairDeletionSupportSummary> collect_pair_deletion_support(
@@ -664,6 +685,20 @@ bool should_merge_overlapping_calls(const StructuralVariantCall& lhs,
     return lhs_source_ref == rhs_source_ref || lhs_sink_ref == rhs_sink_ref;
 }
 
+int32_t unitig_min_ref_pos(const Unitig& unitig) {
+    if (!unitig.ref_positions.empty()) {
+        return *unitig.ref_positions.begin();
+    }
+    return unitig.ref_pos;
+}
+
+int32_t unitig_max_ref_pos(const Unitig& unitig) {
+    if (!unitig.ref_positions.empty()) {
+        return *unitig.ref_positions.rbegin();
+    }
+    return unitig.ref_pos;
+}
+
 StructuralVariantCall build_pair_supported_deletion_call(
     const UnitigGraph& graph,
     const PairDeletionSupportSummary& summary,
@@ -672,14 +707,17 @@ StructuralVariantCall build_pair_supported_deletion_call(
     const std::string& call_id) {
     StructuralVariantCall call;
     const auto& left_unitig = graph.unitig(summary.left_unitig_id);
+    const auto& right_unitig = graph.unitig(summary.right_unitig_id);
+    const int32_t left_boundary = unitig_max_ref_pos(left_unitig);
+    const int32_t right_boundary = unitig_min_ref_pos(right_unitig);
     call.chrom = chrom;
-    call.pos = coord_offset + summary.left_ref_pos;
-    call.end = coord_offset + summary.right_ref_pos + 1;
+    call.pos = coord_offset + left_boundary + 1;
+    call.end = coord_offset + right_boundary;
     call.id = call_id;
-    call.ref = left_unitig.sequence.empty() ? "N" : left_unitig.sequence.substr(0, 1);
+    call.ref = left_unitig.sequence.empty() ? "N" : left_unitig.sequence.substr(left_unitig.sequence.size() - 1, 1);
     call.alt = "<DEL>";
     call.sv_type = "DEL";
-    call.sv_len = -(summary.right_ref_pos - summary.left_ref_pos);
+    call.sv_len = -std::max<int32_t>(0, right_boundary - left_boundary - 1);
     call.support_score = static_cast<double>(summary.support_count);
     call.info_fields.push_back("SRC_UID=" + std::to_string(summary.left_unitig_id));
     call.info_fields.push_back("SNK_UID=" + std::to_string(summary.right_unitig_id));

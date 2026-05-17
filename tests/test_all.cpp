@@ -767,7 +767,10 @@ TEST(SvCaller, CallsPairSupportedDeletionWithoutAlternateUnitigPath) {
     ASSERT_EQ(calls.size(), 1u);
 
     EXPECT_EQ(calls[0].chrom, "chrPair");
+    EXPECT_EQ(calls[0].pos, 101);
+    EXPECT_EQ(calls[0].end, 103);
     EXPECT_EQ(calls[0].sv_type, "DEL");
+    EXPECT_EQ(calls[0].sv_len, -2);
     EXPECT_EQ(calls[0].alt, "<DEL>");
     EXPECT_EQ(calls[0].support_score, 2.0);
     EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "CALL_SOURCE=PAIR"),
@@ -825,6 +828,59 @@ TEST(SvCaller, UsesFragmentFallbackWhenLocalCalibrationIsUnavailable) {
     EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "PAIR_SUPPORT=2"),
               calls[0].info_fields.end());
 }
+
+TEST(SvCaller, AllowsNonProperFrPairsForDeletionRescue) {
+    sharda::DBG graph(3);
+
+    auto source = graph.add_backbone_node("AAA", 0, -1);
+    auto ref1 = graph.add_backbone_node("AAC", 1, -1);
+    auto ref2 = graph.add_backbone_node("ACC", 2, -1);
+    auto sink = graph.add_backbone_node("CCC", 3, -1);
+
+    graph.add_edge(source, ref1);
+    graph.add_edge(ref1, ref2);
+    graph.add_edge(ref2, sink);
+
+    auto alt = graph.add_read_node("ACC");
+    graph.add_node_ref_pos(alt, 2);
+    graph.add_edge(source, alt);
+    graph.add_edge(alt, sink);
+
+    graph.node_mut(source).depth = 12;
+    graph.node_mut(ref1).depth = 1;
+    graph.node_mut(ref2).depth = 1;
+    graph.node_mut(sink).depth = 12;
+    graph.node_mut(alt).depth = 2;
+
+    sharda::UnitigGraph ug;
+    ASSERT_TRUE(ug.build(graph));
+
+    std::vector<sharda::ReadPair> pairs;
+    for (size_t index = 0; index < 25; ++index) {
+        pairs.push_back(make_fr_pair("cal" + std::to_string(index), 0, 1, 1, 2, 2));
+    }
+
+    auto del_a = make_fr_pair("delA", 0, 1, 3, 4, 8);
+    del_a.read1.flag &= static_cast<uint16_t>(~0x2);
+    del_a.read2.flag &= static_cast<uint16_t>(~0x2);
+    pairs.push_back(del_a);
+
+    auto del_b = make_fr_pair("delB", 0, 1, 3, 4, 8);
+    del_b.read1.flag &= static_cast<uint16_t>(~0x2);
+    del_b.read2.flag &= static_cast<uint16_t>(~0x2);
+    pairs.push_back(del_b);
+
+    auto calls = sharda::call_pair_supported_deletions(ug, pairs, "chrNonProper", 100);
+    ASSERT_EQ(calls.size(), 1u);
+    EXPECT_EQ(calls[0].chrom, "chrNonProper");
+    EXPECT_EQ(calls[0].sv_type, "DEL");
+    EXPECT_EQ(calls[0].alt, "<DEL>");
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "CALL_SOURCE=PAIR"),
+              calls[0].info_fields.end());
+    EXPECT_NE(std::find(calls[0].info_fields.begin(), calls[0].info_fields.end(), "PAIR_SUPPORT=2"),
+              calls[0].info_fields.end());
+}
+
 
 TEST(SvCaller, UsesNearestBackboneRejoinForCanonicalInterval) {
     sharda::DBG graph(3);
